@@ -3,7 +3,7 @@
   <div class="flex flex-col items-center justify-center min-h-screen p-4 md-surface-dim">
     <!-- Logo / Title -->
     <div class="mb-10">
-      <TypewriterEffect text="拯 救 小 说 家" />
+      <TypewriterEffect text="宝拓小说" />
     </div>
 
     <!-- Material 3 Card -->

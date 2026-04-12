@@ -2,7 +2,7 @@
 <template>
   <div class="flex flex-col items-center justify-center min-h-screen p-4">
     <div class="mb-12">
-      <TypewriterEffect text="拯救小说家" />
+      <TypewriterEffect text="宝拓小说" />
     </div>
     <div v-if="allowRegistration" class="w-full max-w-md p-8 space-y-8 bg-white/70 backdrop-blur-xl rounded-2xl shadow-xl">
       <div>

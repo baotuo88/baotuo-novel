@@ -91,7 +91,7 @@
       <div class="text-center p-8 fade-in">
         <!-- Title -->
         <h1 class="md-display-small mb-4" style="color: var(--md-on-surface);">
-          拯救小说家：创作中心
+          宝拓小说：创作中心
         </h1>
         <p class="md-body-large mb-12" style="color: var(--md-on-surface-variant);">
           从一个新灵感开始，或继续打磨你的世界。

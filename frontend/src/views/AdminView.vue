@@ -44,8 +44,8 @@
           </n-space>
           <n-space align="center" :size="10">
             <span class="header-subtitle">高效掌控平台运行状态</span>
-            <n-button size="small" type="primary" ghost @click="goBack">
-              返回业务系统
+            <n-button size="small" type="primary" ghost :disabled="mustChangePassword" @click="goBack">
+              {{ mustChangePassword ? '请先修改密码' : '返回业务系统' }}
             </n-button>
           </n-space>
         </n-space>
@@ -73,11 +73,13 @@ import {
   type MenuOption
 } from 'naive-ui'
 import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 const collapsed = ref(false)
 const activeKey = ref<MenuKey>('statistics')
 const router = useRouter()
 const route = useRoute()
+const authStore = useAuthStore()
 
 type MenuKey =
   | 'statistics'
@@ -144,8 +146,14 @@ const currentMenuLabel = computed(() => {
   const match = menuOptions.find((option) => option.key === activeKey.value)
   return match ? (match.label as string) : ''
 })
+const mustChangePassword = computed(() => Boolean(authStore.user?.is_admin && authStore.mustChangePassword))
 
 const goBack = () => {
+  if (mustChangePassword.value) {
+    window.alert('请先在“安全中心”修改初始密码，然后再返回业务系统。')
+    router.replace({ name: 'admin', query: { tab: 'password' } })
+    return
+  }
   router.push('/')
 }
 
