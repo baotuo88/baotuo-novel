@@ -376,15 +376,26 @@ async def _generate_chapter_pipeline_async(
         orchestrator = PipelineOrchestrator(bg_session)
         novel_service = NovelService(bg_session)
         async_max_seconds_raw = os.getenv("WRITER_ASYNC_MAX_SECONDS", "480").strip()
-        async_versions_raw = os.getenv("WRITER_ASYNC_VERSION_COUNT", "1").strip()
+        async_versions_raw = os.getenv("WRITER_ASYNC_VERSION_COUNT", "").strip()
         try:
             async_max_seconds = max(60, int(async_max_seconds_raw))
         except ValueError:
             async_max_seconds = 480
-        try:
-            async_versions = max(1, int(async_versions_raw))
-        except ValueError:
-            async_versions = 1
+        # 版本数优先级：
+        # 1) WRITER_ASYNC_VERSION_COUNT（仅异步路径专用覆盖）
+        # 2) 系统配置 writer.chapter_versions / writer.version_count
+        # 3) WRITER_CHAPTER_VERSION_COUNT / settings 默认值
+        if async_versions_raw:
+            try:
+                async_versions = max(1, int(async_versions_raw))
+            except ValueError:
+                logger.warning(
+                    "WRITER_ASYNC_VERSION_COUNT 非法值 %s，回退到通用版本数配置",
+                    async_versions_raw,
+                )
+                async_versions = await _resolve_version_count(bg_session)
+        else:
+            async_versions = await _resolve_version_count(bg_session)
         try:
             await asyncio.wait_for(
                 orchestrator.generate_chapter(
