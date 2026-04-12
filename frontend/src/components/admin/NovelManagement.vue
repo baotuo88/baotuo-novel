@@ -32,7 +32,9 @@
                 <template #header>
                   <div class="mobile-card-header">
                     <span class="mobile-card-title">{{ novel.title }}</span>
-                    <n-tag size="small" type="info" round>{{ novel.genre || '未分类' }}</n-tag>
+                    <n-tag size="small" type="info" round class="mobile-genre-tag">
+                      <span class="mobile-genre-text">{{ novel.genre || '未分类' }}</span>
+                    </n-tag>
                   </div>
                 </template>
                 <div class="mobile-meta">
@@ -95,6 +97,7 @@ import {
   NEmpty,
   NPagination,
   NSpin,
+  NTooltip,
   NTag,
   NSpace,
   type DataTableColumns
@@ -167,6 +170,15 @@ const formatProgress = (novel: Pick<AdminNovelSummary, 'completed_chapters' | 't
   return `${completed} / ${total}`
 }
 
+const normalizeText = (value: string | null | undefined, fallback: string) => {
+  const normalized = (value || '').trim()
+  return normalized || fallback
+}
+
+const truncateText = (value: string, limit: number) => {
+  return value.length > limit ? `${value.slice(0, limit)}...` : value
+}
+
 const viewDetails = (novelId: string) => {
   router.push(`/admin/novel/${novelId}`)
 }
@@ -189,10 +201,23 @@ const columns: DataTableColumns<AdminNovelSummary> = [
     key: 'genre',
     width: 128,
     render(row) {
-      return h(
+      const fullGenre = normalizeText(row.genre, '未分类')
+      const shortGenre = truncateText(fullGenre, 10)
+      const tagVNode = h(
         NTag,
-        { type: 'info', size: 'small', round: true, bordered: false },
-        { default: () => (row.genre || '未分类') }
+        { type: 'info', size: 'small', round: true, bordered: false, class: 'table-genre-tag' },
+        { default: () => h('span', { class: 'table-genre-text' }, shortGenre) }
+      )
+      if (shortGenre === fullGenre) {
+        return tagVNode
+      }
+      return h(
+        NTooltip,
+        { placement: 'top' },
+        {
+          trigger: () => tagVNode,
+          default: () => fullGenre
+        }
       )
     }
   },
@@ -298,6 +323,10 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
+:deep(.novel-table .n-data-table-table) {
+  table-layout: fixed;
+}
+
 .table-title-cell {
   display: flex;
   flex-direction: column;
@@ -315,7 +344,29 @@ onBeforeUnmount(() => {
   word-break: break-all;
 }
 
-.table-owner,
+.table-owner {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: #374151;
+}
+
+.table-genre-tag {
+  max-width: 100%;
+}
+
+.table-genre-text {
+  display: inline-block;
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
 .table-progress,
 .table-date {
   color: #374151;
@@ -327,15 +378,32 @@ onBeforeUnmount(() => {
 
 .mobile-card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .mobile-card-title {
+  flex: 1 1 160px;
+  min-width: 0;
   font-size: 1rem;
   font-weight: 600;
   color: #111827;
+  word-break: break-word;
+}
+
+.mobile-genre-tag {
+  max-width: 100%;
+}
+
+.mobile-genre-text {
+  display: inline-block;
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 .mobile-meta {
