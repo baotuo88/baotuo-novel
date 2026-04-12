@@ -12,6 +12,7 @@ Writer API Router - 人类化起点长篇写作系统
 2. 跨章 1234 逻辑：通过 ChapterMission 控制每章只写一个节拍
 3. 后置护栏检查：自动检测并修复违规内容
 """
+import asyncio
 import json
 import logging
 import os
@@ -355,13 +356,29 @@ async def _generate_chapter_pipeline_async(
     async with AsyncSessionLocal() as bg_session:
         orchestrator = PipelineOrchestrator(bg_session)
         novel_service = NovelService(bg_session)
+        async_max_seconds_raw = os.getenv("WRITER_ASYNC_MAX_SECONDS", "480").strip()
+        async_versions_raw = os.getenv("WRITER_ASYNC_VERSION_COUNT", "1").strip()
         try:
-            await orchestrator.generate_chapter(
-                project_id=project_id,
-                chapter_number=chapter_number,
-                writing_notes=writing_notes,
-                user_id=user_id,
-                flow_config={"preset": "basic"},
+            async_max_seconds = max(60, int(async_max_seconds_raw))
+        except ValueError:
+            async_max_seconds = 480
+        try:
+            async_versions = max(1, int(async_versions_raw))
+        except ValueError:
+            async_versions = 1
+        try:
+            await asyncio.wait_for(
+                orchestrator.generate_chapter(
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    writing_notes=writing_notes,
+                    user_id=user_id,
+                    flow_config={
+                        "preset": "basic",
+                        "versions": async_versions,
+                    },
+                ),
+                timeout=async_max_seconds,
             )
             logger.info(
                 "异步章节生成完成: project_id=%s chapter=%s user_id=%s",
@@ -369,6 +386,26 @@ async def _generate_chapter_pipeline_async(
                 chapter_number,
                 user_id,
             )
+        except asyncio.TimeoutError:
+            logger.error(
+                "异步章节生成超时: project_id=%s chapter=%s user_id=%s max_seconds=%s",
+                project_id,
+                chapter_number,
+                user_id,
+                async_max_seconds,
+            )
+            try:
+                chapter = await novel_service.get_or_create_chapter(project_id, chapter_number)
+                chapter.status = ChapterGenerationStatus.FAILED.value
+                await bg_session.commit()
+            except Exception:
+                await bg_session.rollback()
+                logger.exception(
+                    "异步章节超时后写回状态失败: project_id=%s chapter=%s user_id=%s",
+                    project_id,
+                    chapter_number,
+                    user_id,
+                )
         except Exception as exc:
             logger.exception(
                 "异步章节生成失败: project_id=%s chapter=%s user_id=%s error=%s",
