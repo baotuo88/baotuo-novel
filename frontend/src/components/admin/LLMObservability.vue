@@ -46,6 +46,14 @@
       </n-grid>
 
       <n-spin :show="loading">
+        <n-tabs v-model:value="activeSection" type="line" animated class="obs-tabs">
+          <n-tab-pane name="overview" tab="概览" />
+          <n-tab-pane name="queue" tab="队列" />
+          <n-tab-pane name="trend" tab="趋势" />
+          <n-tab-pane name="logs" tab="明细" />
+        </n-tabs>
+
+        <div v-show="activeSection === 'overview'" class="obs-section">
         <n-grid :cols="summaryGridCols" :x-gap="12" :y-gap="12">
           <n-gi>
             <n-card :bordered="false" class="stat-card">
@@ -151,7 +159,7 @@
                 v-else
                 :columns="budgetUserColumns"
                 :data="budgetAlerts?.users || []"
-                :pagination="false"
+                :pagination="{ pageSize: 8 }"
                 :bordered="false"
                 size="small"
               />
@@ -167,14 +175,16 @@
                 v-else
                 :columns="budgetProjectColumns"
                 :data="budgetAlerts?.projects || []"
-                :pagination="false"
+                :pagination="{ pageSize: 8 }"
                 :bordered="false"
                 size="small"
               />
             </n-card>
           </n-gi>
         </n-grid>
+        </div>
 
+        <div v-show="activeSection === 'queue'" class="obs-section">
         <n-card :bordered="false" size="small" class="section-card">
           <template #header>
             <div class="card-header">
@@ -224,7 +234,9 @@
             :row-class-name="queueRowClassName"
           />
         </n-card>
+        </div>
 
+        <div v-show="activeSection === 'trend'" class="obs-section">
         <n-grid :cols="trendGridCols" :x-gap="12" :y-gap="12" class="section-grid">
           <n-gi>
             <n-card :bordered="false" size="small" class="section-card">
@@ -278,12 +290,14 @@
             v-else
             :columns="errorColumns"
             :data="errorTop"
-            :pagination="false"
+            :pagination="{ pageSize: 12 }"
             :bordered="false"
             size="small"
           />
         </n-card>
+        </div>
 
+        <div v-show="activeSection === 'logs'" class="obs-section">
         <n-card :bordered="false" size="small" class="section-card">
           <template #header>
             <div class="section-title">调用明细（最新 100 条）</div>
@@ -297,6 +311,7 @@
             class="log-table"
           />
         </n-card>
+        </div>
       </n-spin>
     </n-space>
   </n-card>
@@ -322,6 +337,8 @@ import {
   NSpin,
   NStatistic,
   NSwitch,
+  NTabPane,
+  NTabs,
   NTag,
   type DataTableColumns
 } from 'naive-ui'
@@ -352,6 +369,7 @@ const router = useRouter()
 const loading = ref(false)
 const exporting = ref(false)
 const error = ref<string | null>(null)
+const activeSection = ref<'overview' | 'queue' | 'trend' | 'logs'>('overview')
 const logs = ref<LLMCallLog[]>([])
 const summary = ref<LLMCallSummary | null>(null)
 const trendByModel = ref<LLMGroupedTrendResponse | null>(null)
@@ -1163,6 +1181,16 @@ watch(
 
 .section-grid {
   margin-top: 4px;
+}
+
+.obs-tabs {
+  margin-bottom: 8px;
+}
+
+.obs-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .section-card {

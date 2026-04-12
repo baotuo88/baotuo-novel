@@ -1,79 +1,129 @@
 <!-- AIMETA P=注册页_用户注册|R=注册表单|NR=不含登录功能|E=route:/register#component:Register|X=ui|A=注册表单|D=vue|S=dom,net|RD=./README.ai -->
 <template>
-  <div class="flex flex-col items-center justify-center min-h-screen p-4">
-    <div class="mb-12">
-      <TypewriterEffect text="宝拓小说" />
-    </div>
-    <div v-if="allowRegistration" class="w-full max-w-md p-8 space-y-8 bg-white/70 backdrop-blur-xl rounded-2xl shadow-xl">
-      <div>
-        <h2 class="text-2xl font-bold text-center text-gray-800">
-          加入我们
-        </h2>
-        <p class="mt-2 text-sm text-center text-gray-500">
-          开启您的创作新篇章
+  <div class="platform-shell auth-shell">
+    <div class="auth-container page-enter">
+      <section class="auth-brand-panel stagger-in" style="animation-delay: 20ms;">
+        <div class="platform-brand-mark w-12 h-12">
+          <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+          </svg>
+        </div>
+        <p class="md-label-large mb-3" style="color: var(--md-primary);">创作者入驻</p>
+        <h1 class="md-display-small mb-3" style="color: var(--md-on-surface);">建立你的创作空间</h1>
+        <p class="md-body-large mb-8" style="color: var(--md-on-surface-variant);">
+          注册后即可使用灵感模式、蓝图生成和章节协作能力。
         </p>
-      </div>
-      <form @submit.prevent="handleRegister" class="mt-8 space-y-6">
-        <div class="space-y-4">
-          <div>
-            <label for="username" class="sr-only">用户名</label>
-            <input v-model="username" id="username" name="username" type="text" required
-              class="w-full px-4 py-3 text-gray-700 bg-gray-100 border-2 border-gray-200 rounded-lg focus:outline-none focus:bg-white focus:border-blue-500 transition-all duration-300"
-              placeholder="用户名" />
-          </div>
-          <div>
-            <label for="email" class="sr-only">邮箱</label>
-            <input v-model="email" id="email" name="email" type="email" required
-              class="w-full px-4 py-3 text-gray-700 bg-gray-100 border-2 border-gray-200 rounded-lg focus:outline-none focus:bg-white focus:border-blue-500 transition-all duration-300"
-              placeholder="邮箱" />
-          </div>
-          <div class="flex space-x-2 items-center">
-            <input v-model="verificationCode" id="verificationCode" name="verificationCode" type="text" required
-              class="flex-1 px-4 py-3 text-gray-700 bg-gray-100 border-2 border-gray-200 rounded-lg focus:outline-none focus:bg-white focus:border-blue-500 transition-all duration-300"
-              placeholder="验证码" />
-            <button type="button" @click="sendCode" :disabled="countdown > 0 || sending"
-              class="px-4 py-3 text-sm font-bold text-white bg-green-600 rounded-lg hover:bg-green-700 focus:outline-none focus:ring-4 focus:ring-green-300 disabled:opacity-60 transition-all duration-300">
-              <span v-if="sending">发送中...</span>
-              <span v-else>{{ countdown > 0 ? countdown + '秒后重试' : '发送验证码' }}</span>
-            </button>
-          </div>
-          <div>
-            <label for="password" class="sr-only">密码</label>
-            <input v-model="password" id="password" name="password" type="password" required
-              class="w-full px-4 py-3 text-gray-700 bg-gray-100 border-2 border-gray-200 rounded-lg focus:outline-none focus:bg-white focus:border-blue-500 transition-all duration-300"
-              placeholder="密码" />
-          </div>
-        </div>
 
-        <div v-if="error" class="text-sm font-medium text-center text-red-500">
-          {{ error }}
+        <div class="auth-feature-grid">
+          <div class="auth-feature-card">
+            <p class="platform-stat-label">创作引擎</p>
+            <p class="platform-stat-value">AI 驱动</p>
+            <p class="platform-stat-hint">对话生成与结构化蓝图</p>
+          </div>
+          <div class="auth-feature-card">
+            <p class="platform-stat-label">管理方式</p>
+            <p class="platform-stat-value">项目化</p>
+            <p class="platform-stat-hint">工程式管理每本小说</p>
+          </div>
         </div>
-        <div v-if="success" class="text-sm font-medium text-center text-green-500">
-          {{ success }}
-        </div>
+      </section>
 
-        <div>
-          <button type="submit"
-            class="w-full px-4 py-3 text-sm font-bold text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 disabled:opacity-60 transition-all duration-300">
-            注册
-          </button>
-        </div>
-      </form>
-      
-      <p class="mt-8 text-sm text-center text-gray-500">
-        已有账户？
-        <router-link to="/login" class="font-medium text-blue-600 hover:underline">
-          立即登录
-        </router-link>
-      </p>
-    </div>
+      <section v-if="allowRegistration" class="md-card md-card-elevated auth-form-panel stagger-in" style="border-radius: var(--md-radius-xl); animation-delay: 90ms;">
+        <h2 class="md-headline-medium" style="color: var(--md-on-surface);">注册账号</h2>
+        <p class="md-body-medium mt-2 mb-6" style="color: var(--md-on-surface-variant);">创建账号并开始你的第一部作品。</p>
 
-    <div v-else class="w-full max-w-md p-8 space-y-6 text-center bg-white/70 backdrop-blur-xl rounded-2xl shadow-xl">
-      <h2 class="text-xl font-bold text-gray-800">暂未开放注册</h2>
-      <p class="text-sm text-gray-500">请联系管理员或稍后再试。</p>
-      <router-link to="/login" class="inline-block px-4 py-2 text-sm font-medium text-blue-600 hover:underline">
-        返回登录
-      </router-link>
+        <form @submit.prevent="handleRegister" class="space-y-4">
+          <div class="md-text-field">
+            <label for="username" class="md-text-field-label">用户名</label>
+            <input
+              v-model="username"
+              id="username"
+              name="username"
+              type="text"
+              required
+              class="md-text-field-input"
+              placeholder="请输入用户名"
+            />
+          </div>
+
+          <div class="md-text-field">
+            <label for="email" class="md-text-field-label">邮箱</label>
+            <input
+              v-model="email"
+              id="email"
+              name="email"
+              type="email"
+              required
+              class="md-text-field-input"
+              placeholder="请输入邮箱"
+            />
+          </div>
+
+          <div>
+            <label for="verificationCode" class="md-text-field-label">验证码</label>
+            <div class="flex gap-2 items-center mt-1">
+              <input
+                v-model="verificationCode"
+                id="verificationCode"
+                name="verificationCode"
+                type="text"
+                required
+                class="md-text-field-input flex-1"
+                placeholder="请输入验证码"
+              />
+              <button
+                type="button"
+                @click="sendCode"
+                :disabled="countdown > 0 || sending"
+                class="md-btn md-btn-tonal md-ripple whitespace-nowrap"
+              >
+                <span v-if="sending">发送中...</span>
+                <span v-else>{{ countdown > 0 ? countdown + '秒后重试' : '发送验证码' }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="md-text-field">
+            <label for="password" class="md-text-field-label">密码</label>
+            <input
+              v-model="password"
+              id="password"
+              name="password"
+              type="password"
+              required
+              class="md-text-field-input"
+              placeholder="至少 8 位"
+            />
+          </div>
+
+          <div v-if="error" class="flex items-center gap-2 p-3 rounded-lg" style="background-color: var(--md-error-container);">
+            <svg class="w-5 h-5 flex-shrink-0" style="color: var(--md-error);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span class="md-body-medium" style="color: var(--md-on-error-container);">{{ error }}</span>
+          </div>
+
+          <div v-if="success" class="flex items-center gap-2 p-3 rounded-lg" style="background-color: var(--md-success-container);">
+            <svg class="w-5 h-5 flex-shrink-0" style="color: var(--md-success);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            <span class="md-body-medium" style="color: var(--md-on-success-container);">{{ success }}</span>
+          </div>
+
+          <button type="submit" class="md-btn md-btn-filled md-ripple w-full h-12">注册</button>
+        </form>
+
+        <p class="mt-7 text-center md-body-medium" style="color: var(--md-on-surface-variant);">
+          已有账户？
+          <router-link to="/login" class="md-label-large" style="color: var(--md-primary);">立即登录</router-link>
+        </p>
+      </section>
+
+      <section v-else class="md-card md-card-elevated auth-form-panel stagger-in" style="border-radius: var(--md-radius-xl); animation-delay: 90ms;">
+        <h2 class="md-headline-small" style="color: var(--md-on-surface);">暂未开放注册</h2>
+        <p class="md-body-medium mt-3" style="color: var(--md-on-surface-variant);">请联系管理员或稍后再试。</p>
+        <router-link to="/login" class="md-btn md-btn-tonal md-ripple mt-6 inline-flex">返回登录</router-link>
+      </section>
     </div>
   </div>
 </template>
@@ -82,7 +132,6 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import TypewriterEffect from '@/components/TypewriterEffect.vue';
 
 const username = ref('');
 const email = ref('');
@@ -132,7 +181,7 @@ const validateInput = () => {
   if (isAlphanumeric && !hasChinese && usernameVal.length <= 6) {
     return '用户名长度必须大于6个字母或数字';
   }
-  
+
   return null; // No validation errors
 };
 

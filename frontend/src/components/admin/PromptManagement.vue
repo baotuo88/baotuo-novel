@@ -37,11 +37,18 @@
 
         <div :class="['preset-layout', { mobile: isMobile }]">
           <div class="preset-sidebar">
+            <n-input
+              v-model:value="presetQuery"
+              clearable
+              size="small"
+              placeholder="搜索预设名 / ID"
+              class="sidebar-search"
+            />
             <n-scrollbar class="preset-scroll">
-              <n-empty v-if="!presets.length && !presetLoading" description="暂无预设" />
+              <n-empty v-if="!filteredPresets.length && !presetLoading" description="暂无预设" />
               <n-space v-else vertical size="small">
                 <n-button
-                  v-for="preset in presets"
+                  v-for="preset in pagedPresets"
                   :key="preset.preset_id"
                   block
                   quaternary
@@ -59,6 +66,16 @@
                 </n-button>
               </n-space>
             </n-scrollbar>
+            <n-pagination
+              v-if="filteredPresets.length > presetPagination.pageSize"
+              v-model:page="presetPagination.page"
+              v-model:page-size="presetPagination.pageSize"
+              :page-count="presetPageCount"
+              :page-sizes="[8, 12, 16]"
+              size="small"
+              show-size-picker
+              class="sidebar-pagination"
+            />
           </div>
 
           <div class="preset-editor">
@@ -148,11 +165,18 @@
       <n-spin :show="loading">
         <div :class="['prompt-layout', { mobile: isMobile }]">
           <div class="prompt-sidebar">
+            <n-input
+              v-model:value="promptQuery"
+              clearable
+              size="small"
+              placeholder="搜索提示词名称"
+              class="sidebar-search"
+            />
             <n-scrollbar class="prompt-scroll">
-              <n-empty v-if="!prompts.length && !loading" description="暂无提示词" />
+              <n-empty v-if="!filteredPrompts.length && !loading" description="暂无提示词" />
               <n-space v-else vertical size="small">
                 <n-button
-                  v-for="prompt in prompts"
+                  v-for="prompt in pagedPrompts"
                   :key="prompt.id"
                   type="primary"
                   :ghost="selectedPrompt?.id !== prompt.id"
@@ -169,6 +193,16 @@
                 </n-button>
               </n-space>
             </n-scrollbar>
+            <n-pagination
+              v-if="filteredPrompts.length > promptPagination.pageSize"
+              v-model:page="promptPagination.page"
+              v-model:page-size="promptPagination.pageSize"
+              :page-count="promptPageCount"
+              :page-sizes="[8, 12, 16]"
+              size="small"
+              show-size-picker
+              class="sidebar-pagination"
+            />
           </div>
 
           <div class="prompt-editor">
@@ -264,7 +298,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   NAlert,
   NButton,
@@ -276,6 +310,7 @@ import {
   NInput,
   NInputNumber,
   NModal,
+  NPagination,
   NPopconfirm,
   NScrollbar,
   NSelect,
@@ -347,6 +382,54 @@ const promptNameOptions = computed(() => {
 })
 
 const isMobile = ref(false)
+const presetQuery = ref('')
+const promptQuery = ref('')
+const presetPagination = reactive({
+  page: 1,
+  pageSize: 10
+})
+const promptPagination = reactive({
+  page: 1,
+  pageSize: 10
+})
+
+const filteredPresets = computed(() => {
+  const query = presetQuery.value.trim().toLowerCase()
+  if (!query) return presets.value
+  return presets.value.filter((item) =>
+    item.name.toLowerCase().includes(query) ||
+    item.preset_id.toLowerCase().includes(query) ||
+    (item.description || '').toLowerCase().includes(query)
+  )
+})
+
+const presetPageCount = computed(() =>
+  Math.max(1, Math.ceil(filteredPresets.value.length / presetPagination.pageSize))
+)
+
+const pagedPresets = computed(() => {
+  const start = (presetPagination.page - 1) * presetPagination.pageSize
+  return filteredPresets.value.slice(start, start + presetPagination.pageSize)
+})
+
+const filteredPrompts = computed(() => {
+  const query = promptQuery.value.trim().toLowerCase()
+  if (!query) return prompts.value
+  return prompts.value.filter((item) =>
+    item.name.toLowerCase().includes(query) ||
+    (item.title || '').toLowerCase().includes(query) ||
+    (item.tags || []).some((tag) => tag.toLowerCase().includes(query))
+  )
+})
+
+const promptPageCount = computed(() =>
+  Math.max(1, Math.ceil(filteredPrompts.value.length / promptPagination.pageSize))
+)
+
+const pagedPrompts = computed(() => {
+  const start = (promptPagination.page - 1) * promptPagination.pageSize
+  return filteredPrompts.value.slice(start, start + promptPagination.pageSize)
+})
 
 const updateLayout = () => {
   isMobile.value = window.innerWidth < 920
@@ -357,6 +440,7 @@ const fetchPrompts = async () => {
   error.value = null
   try {
     prompts.value = await AdminAPI.listPrompts()
+    promptPagination.page = 1
     if (selectedPrompt.value) {
       const refreshed = prompts.value.find((item) => item.id === selectedPrompt.value?.id)
       if (refreshed) {
@@ -501,6 +585,7 @@ const fetchPresets = async () => {
   presetLoading.value = true
   try {
     presets.value = await AdminAPI.listWritingPresets()
+    presetPagination.page = 1
     if (selectedPreset.value) {
       const refreshed = presets.value.find((item) => item.preset_id === selectedPreset.value?.preset_id)
       if (refreshed) {
@@ -583,6 +668,38 @@ const removePreset = async () => {
   }
 }
 
+watch(
+  () => presetQuery.value,
+  () => {
+    presetPagination.page = 1
+  }
+)
+
+watch(
+  () => promptQuery.value,
+  () => {
+    promptPagination.page = 1
+  }
+)
+
+watch(
+  () => filteredPresets.value.length,
+  () => {
+    if (presetPagination.page > presetPageCount.value) {
+      presetPagination.page = presetPageCount.value
+    }
+  }
+)
+
+watch(
+  () => filteredPrompts.value.length,
+  () => {
+    if (promptPagination.page > promptPageCount.value) {
+      promptPagination.page = promptPageCount.value
+    }
+  }
+)
+
 onMounted(() => {
   updateLayout()
   window.addEventListener('resize', updateLayout)
@@ -638,6 +755,10 @@ onBeforeUnmount(() => {
 .preset-sidebar {
   width: 260px;
   flex-shrink: 0;
+}
+
+.sidebar-search {
+  margin-bottom: 8px;
 }
 
 .preset-layout.mobile .preset-sidebar {
@@ -698,6 +819,11 @@ onBeforeUnmount(() => {
 .prompt-layout.mobile .prompt-sidebar {
   width: 100%;
   max-height: 220px;
+}
+
+.sidebar-pagination {
+  margin-top: 8px;
+  justify-content: center;
 }
 
 .prompt-scroll {

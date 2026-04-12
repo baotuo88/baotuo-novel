@@ -1,6 +1,8 @@
 <!-- AIMETA P=设置管理_系统设置界面|R=系统配置表单|NR=不含用户设置|E=component:SettingsManagement|X=ui|A=设置组件|D=vue|S=dom,net|RD=./README.ai -->
 <template>
   <n-space vertical size="large" class="admin-settings">
+    <n-tabs v-model:value="activeSection" type="line" animated class="admin-section-tabs">
+      <n-tab-pane name="quota" tab="额度与策略">
     <n-card :bordered="false">
       <template #header>
         <div class="card-header">
@@ -76,6 +78,9 @@
         </n-form>
       </n-spin>
     </n-card>
+      </n-tab-pane>
+
+      <n-tab-pane name="override" tab="预算覆盖">
 
     <n-card :bordered="false">
       <template #header>
@@ -134,7 +139,7 @@
             <n-data-table
               :columns="userOverrideColumns"
               :data="filteredUserBudgetOverrides"
-              :pagination="false"
+              :pagination="userOverridePagination"
               :bordered="false"
               size="small"
             />
@@ -179,7 +184,7 @@
             <n-data-table
               :columns="projectOverrideColumns"
               :data="filteredProjectBudgetOverrides"
-              :pagination="false"
+              :pagination="projectOverridePagination"
               :bordered="false"
               size="small"
             />
@@ -187,6 +192,9 @@
         </n-gi>
       </n-grid>
     </n-card>
+      </n-tab-pane>
+
+      <n-tab-pane name="config" tab="系统配置">
 
     <n-card :bordered="false">
       <template #header>
@@ -207,12 +215,15 @@
           :columns="columns"
           :data="configs"
           :loading="configLoading"
+          :pagination="configPagination"
           :bordered="false"
           :row-key="rowKey"
           class="config-table"
         />
       </n-spin>
     </n-card>
+      </n-tab-pane>
+    </n-tabs>
   </n-space>
 
   <n-modal
@@ -287,7 +298,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   NAlert,
   NButton,
@@ -304,6 +315,8 @@ import {
   NSelect,
   NSpace,
   NSpin,
+  NTabPane,
+  NTabs,
   type DataTableColumns,
   type SelectOption
 } from 'naive-ui'
@@ -330,6 +343,7 @@ const configs = ref<SystemConfig[]>([])
 const configLoading = ref(false)
 const configSaving = ref(false)
 const configError = ref<string | null>(null)
+const activeSection = ref<'quota' | 'override' | 'config'>('quota')
 
 const policySaving = ref(false)
 const policyError = ref<string | null>(null)
@@ -502,6 +516,24 @@ const configForm = reactive<SystemConfig>({
   value: '',
   description: ''
 })
+const userOverridePagination = reactive({
+  page: 1,
+  pageSize: 8,
+  showSizePicker: true,
+  pageSizes: [8, 12, 20]
+})
+const projectOverridePagination = reactive({
+  page: 1,
+  pageSize: 8,
+  showSizePicker: true,
+  pageSizes: [8, 12, 20]
+})
+const configPagination = reactive({
+  page: 1,
+  pageSize: 10,
+  showSizePicker: true,
+  pageSizes: [10, 20, 50]
+})
 
 const rowKey = (row: SystemConfig) => row.key
 
@@ -586,6 +618,20 @@ const filteredProjectBudgetOverrides = computed<ProjectBudgetOverrideRow[]>(() =
       row.key.toLowerCase().includes(query)
   )
 })
+
+watch(
+  () => overrideFilter.user_query,
+  () => {
+    userOverridePagination.page = 1
+  }
+)
+
+watch(
+  () => overrideFilter.project_query,
+  () => {
+    projectOverridePagination.page = 1
+  }
+)
 
 const fetchDailyLimit = async () => {
   dailyLimitLoading.value = true
@@ -895,6 +941,7 @@ const fetchConfigs = async () => {
   configError.value = null
   try {
     configs.value = await AdminAPI.listSystemConfigs()
+    configPagination.page = 1
     loadPolicyConfigsFromList(configs.value)
   } catch (err) {
     configError.value = err instanceof Error ? err.message : '加载配置失败'
@@ -1219,6 +1266,14 @@ onBeforeUnmount(() => {
 <style scoped>
 .admin-settings {
   width: 100%;
+}
+
+.admin-section-tabs {
+  width: 100%;
+}
+
+:deep(.admin-section-tabs .n-tabs-nav) {
+  margin-bottom: 6px;
 }
 
 .card-header {

@@ -23,7 +23,7 @@
           <div v-else>
             <n-space v-if="isMobile" vertical size="large">
               <n-card
-                v-for="novel in novels"
+                v-for="novel in pagedMobileNovels"
                 :key="novel.id"
                 size="small"
                 embedded
@@ -57,12 +57,21 @@
                   </n-button>
                 </template>
               </n-card>
+              <n-pagination
+                v-if="novels.length > mobilePagination.pageSize"
+                v-model:page="mobilePagination.page"
+                v-model:page-size="mobilePagination.pageSize"
+                :page-count="mobilePageCount"
+                :page-sizes="[4, 6, 8, 10]"
+                show-size-picker
+                class="mobile-pagination"
+              />
             </n-space>
             <n-data-table
               v-else
               :columns="columns"
               :data="novels"
-              :pagination="pagination"
+              :pagination="desktopPagination"
               :bordered="false"
               size="small"
               class="novel-table"
@@ -75,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NAlert,
@@ -83,6 +92,7 @@ import {
   NCard,
   NDataTable,
   NEmpty,
+  NPagination,
   NSpin,
   NTag,
   NSpace,
@@ -98,10 +108,23 @@ const error = ref<string | null>(null)
 const isMobile = ref(false)
 const router = useRouter()
 
-const pagination = {
+const desktopPagination = reactive({
+  page: 1,
   pageSize: 8,
-  showSizePicker: false
-}
+  showSizePicker: true,
+  pageSizes: [8, 16, 24]
+})
+
+const mobilePagination = reactive({
+  page: 1,
+  pageSize: 6
+})
+
+const mobilePageCount = computed(() => Math.max(1, Math.ceil(novels.value.length / mobilePagination.pageSize)))
+const pagedMobileNovels = computed(() => {
+  const start = (mobilePagination.page - 1) * mobilePagination.pageSize
+  return novels.value.slice(start, start + mobilePagination.pageSize)
+})
 
 const updateLayout = () => {
   isMobile.value = window.innerWidth < 768
@@ -203,12 +226,23 @@ const fetchNovels = async () => {
   error.value = null
   try {
     novels.value = await AdminAPI.listNovels()
+    mobilePagination.page = 1
+    desktopPagination.page = 1
   } catch (e) {
     error.value = e instanceof Error ? e.message : '获取小说数据失败'
   } finally {
     loading.value = false
   }
 }
+
+watch(
+  () => novels.value.length,
+  () => {
+    if (mobilePagination.page > mobilePageCount.value) {
+      mobilePagination.page = mobilePageCount.value
+    }
+  }
+)
 
 onMounted(() => {
   updateLayout()
@@ -307,6 +341,10 @@ onBeforeUnmount(() => {
 
 .empty-state {
   padding: 48px 0;
+}
+
+.mobile-pagination {
+  justify-content: center;
 }
 
 @media (max-width: 767px) {
