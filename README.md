@@ -70,51 +70,74 @@
 ### 方式一：Docker 部署
 
 ```bash
-# 1. 复制配置文件
-cp .env.example .env
+# 1. 复制配置文件（推荐放到 deploy/.env，与 compose 文件同目录）
+cp .env.example deploy/.env
 
-# 2. 编辑 .env 中的必填项：
+# 2. 编辑 deploy/.env 中的必填项：
 #    - SECRET_KEY: 随机字符串，用于 JWT 等
 #    - OPENAI_API_KEY: 大模型 API Key
 #    - ADMIN_DEFAULT_PASSWORD: 管理员密码（勿用默认值）
+#    - APP_PORT: 对外访问端口（如 80 / 16888）
 
 # 3. 启动（默认 SQLite，无需单独安装数据库）
-docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml up -d --build
 
 # 启动后在浏览器访问 http://localhost:<端口>
+```
+
+如果你坚持使用根目录 `.env`，请改用：
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 ```
 
 ### 方式二：使用 MySQL（Compose 内 MySQL）
 
 ```bash
-# .env 中设置 DB_PROVIDER=mysql，然后执行：
+# deploy/.env 中设置 DB_PROVIDER=mysql，然后执行：
 DB_PROVIDER=mysql docker compose -f deploy/docker-compose.yml --profile mysql up -d
 ```
 
 ### 方式三：使用自有 MySQL
 
 ```bash
-# 在 .env 中配置数据库地址、用户名、密码后执行：
+# 在 deploy/.env 中配置数据库地址、用户名、密码后执行：
 DB_PROVIDER=mysql docker compose -f deploy/docker-compose.yml up -d
+```
+
+### ARM 服务器最短流程（Ubuntu）
+
+```bash
+git clone https://github.com/baotuo88/baotuo-novel.git
+cd baotuo-novel
+
+cp .env.example deploy/.env
+nano deploy/.env
+
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml ps
 ```
 
 ---
 
 ## 环境变量说明
 
-常用配置如下（完整项见 `.env.example`）：
+常用配置如下（完整项见 `.env.example` / `deploy/.env`）：
 
 | 配置项 | 必填吗 | 说明 |
 |--------|--------|------|
 | `SECRET_KEY` | ✅ | JWT 加密密钥，需自行随机生成并妥善保管 |
 | `OPENAI_API_KEY` | ✅ | 你的 LLM API Key（OpenAI 或兼容的） |
 | `OPENAI_API_BASE_URL` | ❌ | API 地址，默认是 OpenAI 官方的 |
-| `OPENAI_MODEL_NAME` | ❌ | 模型名称，默认 `gpt-3.5-turbo` |
-| `ADMIN_DEFAULT_PASSWORD` | ❌ | 管理员初始密码，部署后务必修改 |
-| `ALLOW_USER_REGISTRATION` | ❌ | 是否开放注册，默认 `false` |
-| `SMTP_SERVER` / `SMTP_USERNAME` | 开放注册时必填 | 邮件服务，用于发送验证码 |
+| `OPENAI_MODEL_NAME` | ❌ | 模型名称，默认 `gpt-4o-mini`（可按需调整） |
+| `APP_PORT` | ❌ | 对外访问端口，默认 `80` |
+| `ADMIN_DEFAULT_PASSWORD` | ✅ | 管理员初始密码，部署后务必修改 |
+| `ALLOW_USER_REGISTRATION` | ❌ | 是否开放注册，默认 `true` |
+| `SMTP_SERVER` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `EMAIL_FROM` | `ALLOW_USER_REGISTRATION=true` 时必填 | 邮件服务，用于发送验证码 |
 
-> **数据存储：** 默认 SQLite，数据在 Docker 卷中。需映射到本地时，在 `.env` 中设置 `SQLITE_STORAGE_SOURCE=./storage`。
+> **数据存储：** 默认 SQLite，数据在 Docker 卷中。需映射到本地时，在 `deploy/.env` 中设置 `SQLITE_STORAGE_SOURCE=./storage`。
+>
+> **重要：** 使用 `docker compose -f deploy/docker-compose.yml ...` 时，建议维护 `deploy/.env`。否则请显式传 `--env-file .env`。
 
 ---
 
@@ -125,11 +148,14 @@ DB_PROVIDER=mysql docker compose -f deploy/docker-compose.yml up -d
 **Q: 不会用 Docker？**  
 A: 安装 Docker Desktop（Windows/Mac）或 Docker Engine（Linux），按上文命令执行即可。
 
+**Q: 明明填了 SECRET_KEY，为什么还报 `required variable SECRET_KEY is missing`？**  
+A: 多数是 `.env` 路径不匹配导致。你在使用 `-f deploy/docker-compose.yml` 时，推荐用 `deploy/.env`；或改成 `docker compose --env-file .env -f deploy/docker-compose.yml ...`。
+
 **Q: API Key 会泄露吗？**  
-A: 不会。密钥仅存在于服务端 `.env`，不向前端或用户暴露。
+A: 不会。密钥仅存在于服务端环境变量（`deploy/.env` 或你指定的 `--env-file`），不向前端或用户暴露。
 
 **Q: 是否支持其他大模型？**  
-A: 支持。只要提供 OpenAI 兼容接口，在 `.env` 中配置 `OPENAI_API_BASE_URL` 即可。
+A: 支持。只要提供 OpenAI 兼容接口，在 `deploy/.env`（或你的 env 文件）中配置 `OPENAI_API_BASE_URL` 即可。
 
 **Q: 修改了代码如何参与？**  
 A: 欢迎提交 PR 或 Issue。
@@ -137,7 +163,7 @@ A: 欢迎提交 PR 或 Issue。
 ### 生成小说时的常见错误
 
 **Q: 提示"未配置默认 LLM API Key"怎么办？**  
-A: 检查 `.env` 文件中的 `OPENAI_API_KEY` 是否正确配置。如果是个人用户，也可以在个人设置中配置自定义 API Key。
+A: 检查 `deploy/.env`（或你的 env 文件）中的 `OPENAI_API_KEY` 是否正确配置。如果是个人用户，也可以在个人设置中配置自定义 API Key。
 
 **Q: 生成时提示"今日请求次数已达上限"？**  
 A: 系统管理员可能设置了每日请求限制。解决方案：

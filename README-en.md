@@ -70,51 +70,74 @@ The goal is a **writing partner that remembers your world, understands your char
 ### Option 1: Docker
 
 ```bash
-# 1. Copy config
-cp .env.example .env
+# 1. Copy config (recommended: keep it at deploy/.env, same dir as compose file)
+cp .env.example deploy/.env
 
-# 2. Edit required fields in .env:
+# 2. Edit required fields in deploy/.env:
 #    - SECRET_KEY: random string for JWT etc.
 #    - OPENAI_API_KEY: your LLM API key
 #    - ADMIN_DEFAULT_PASSWORD: admin password (do not leave default)
+#    - APP_PORT: public port (e.g. 80 / 16888)
 
 # 3. Start (default SQLite, no separate DB install)
-docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml up -d --build
 
 # Then open http://localhost:<port> in your browser
+```
+
+If you prefer a root-level `.env`, run compose with:
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 ```
 
 ### Option 2: MySQL via Compose
 
 ```bash
-# Set DB_PROVIDER=mysql in .env, then:
+# Set DB_PROVIDER=mysql in deploy/.env, then:
 DB_PROVIDER=mysql docker compose -f deploy/docker-compose.yml --profile mysql up -d
 ```
 
 ### Option 3: Your own MySQL
 
 ```bash
-# Configure DB host, user, password in .env, then:
+# Configure DB host, user, password in deploy/.env, then:
 DB_PROVIDER=mysql docker compose -f deploy/docker-compose.yml up -d
+```
+
+### ARM Server (Ubuntu) Minimal Steps
+
+```bash
+git clone https://github.com/baotuo88/baotuo-novel.git
+cd baotuo-novel
+
+cp .env.example deploy/.env
+nano deploy/.env
+
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml ps
 ```
 
 ---
 
 ## Environment variables
 
-Common options (full list in `.env.example`):
+Common options (full list in `.env.example` / `deploy/.env`):
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `SECRET_KEY` | ✅ | JWT secret; generate randomly and keep safe |
 | `OPENAI_API_KEY` | ✅ | Your LLM API key (OpenAI or compatible) |
 | `OPENAI_API_BASE_URL` | ❌ | API base URL; default is OpenAI |
-| `OPENAI_MODEL_NAME` | ❌ | Model name; default `gpt-3.5-turbo` |
-| `ADMIN_DEFAULT_PASSWORD` | ❌ | Initial admin password; change after deploy |
-| `ALLOW_USER_REGISTRATION` | ❌ | Allow sign-up; default `false` |
-| `SMTP_SERVER` / `SMTP_USERNAME` | If registration on | Mail config for verification emails |
+| `OPENAI_MODEL_NAME` | ❌ | Model name; default `gpt-4o-mini` (adjust as needed) |
+| `APP_PORT` | ❌ | Public port, default `80` |
+| `ADMIN_DEFAULT_PASSWORD` | ✅ | Initial admin password; change after deploy |
+| `ALLOW_USER_REGISTRATION` | ❌ | Allow sign-up; default `true` |
+| `SMTP_SERVER` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `EMAIL_FROM` | Required if `ALLOW_USER_REGISTRATION=true` | Mail config for verification emails |
 
-> **Storage:** Default is SQLite in a Docker volume. To use a local path, set `SQLITE_STORAGE_SOURCE=./storage` in `.env`.
+> **Storage:** Default is SQLite in a Docker volume. To use a local path, set `SQLITE_STORAGE_SOURCE=./storage` in `deploy/.env`.
+>
+> **Important:** with `docker compose -f deploy/docker-compose.yml ...`, keep env vars in `deploy/.env`; otherwise pass `--env-file .env`.
 
 ---
 
@@ -125,11 +148,14 @@ Common options (full list in `.env.example`):
 **Q: I’m not familiar with Docker.**  
 A: Install Docker Desktop (Windows/Mac) or Docker Engine (Linux), then run the commands above.
 
+**Q: I set SECRET_KEY but still get `required variable SECRET_KEY is missing`.**  
+A: This is usually an env-file path mismatch. With `-f deploy/docker-compose.yml`, use `deploy/.env`; or run `docker compose --env-file .env -f deploy/docker-compose.yml ...`.
+
 **Q: Can my API key leak?**  
-A: No. Keys live only in the server `.env` and are not exposed to the frontend or users.
+A: No. Keys stay only in server-side environment vars (`deploy/.env` or your `--env-file`) and are never exposed to frontend users.
 
 **Q: Can I use other LLMs?**  
-A: Yes. Any OpenAI-compatible API works; set `OPENAI_API_BASE_URL` in `.env`.
+A: Yes. Any OpenAI-compatible API works; set `OPENAI_API_BASE_URL` in `deploy/.env` (or your env file).
 
 **Q: I changed the code. How do I contribute?**  
 A: Open a PR or an Issue.
@@ -137,7 +163,7 @@ A: Open a PR or an Issue.
 ### Generation errors
 
 **Q: “Default LLM API Key not configured”?**  
-A: Check `OPENAI_API_KEY` in `.env`. Users can also set a personal API key in settings.
+A: Check `OPENAI_API_KEY` in `deploy/.env` (or your env file). Users can also set a personal API key in settings.
 
 **Q: “Daily request limit reached”?**  
 A: An admin may have set a daily limit. Options: wait until the next day; set your own API key in settings (not subject to quota); or ask the admin to change `daily_request_limit`.
