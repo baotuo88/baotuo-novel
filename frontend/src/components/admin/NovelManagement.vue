@@ -4,7 +4,7 @@
     <template #header>
       <div class="card-header">
         <span class="card-title">小说管理</span>
-        <n-tag size="small" type="primary" round>共 {{ novels.length }} 项</n-tag>
+        <n-tag size="small" type="primary" round>共 {{ normalizedNovels.length }} 项</n-tag>
       </div>
     </template>
 
@@ -16,7 +16,7 @@
       <n-spin :show="loading">
         <template #default>
           <n-empty
-            v-if="!novels.length && !loading"
+            v-if="!normalizedNovels.length && !loading"
             description="暂无小说项目"
             class="empty-state"
           />
@@ -58,7 +58,7 @@
                 </template>
               </n-card>
               <n-pagination
-                v-if="novels.length > mobilePagination.pageSize"
+                v-if="normalizedNovels.length > mobilePagination.pageSize"
                 v-model:page="mobilePagination.page"
                 v-model:page-size="mobilePagination.pageSize"
                 :page-count="mobilePageCount"
@@ -70,8 +70,9 @@
             <n-data-table
               v-else
               :columns="columns"
-              :data="novels"
+              :data="normalizedNovels"
               :pagination="desktopPagination"
+              :scroll-x="980"
               :bordered="false"
               size="small"
               class="novel-table"
@@ -120,11 +121,23 @@ const mobilePagination = reactive({
   pageSize: 6
 })
 
-const mobilePageCount = computed(() => Math.max(1, Math.ceil(novels.value.length / mobilePagination.pageSize)))
 const pagedMobileNovels = computed(() => {
   const start = (mobilePagination.page - 1) * mobilePagination.pageSize
-  return novels.value.slice(start, start + mobilePagination.pageSize)
+  return normalizedNovels.value.slice(start, start + mobilePagination.pageSize)
 })
+
+const normalizedNovels = computed<AdminNovelSummary[]>(() =>
+  novels.value.map((novel) => ({
+    ...novel,
+    title: (novel.title || '').trim() || '未命名项目',
+    genre: (novel.genre || '').trim() || '未分类',
+    owner_username: (novel.owner_username || '').trim() || '未知'
+  }))
+)
+
+const mobilePageCount = computed(() =>
+  Math.max(1, Math.ceil(normalizedNovels.value.length / mobilePagination.pageSize))
+)
 
 const updateLayout = () => {
   isMobile.value = window.innerWidth < 768
@@ -162,6 +175,7 @@ const columns: DataTableColumns<AdminNovelSummary> = [
   {
     title: '项目',
     key: 'title',
+    minWidth: 280,
     ellipsis: { tooltip: true },
     render(row) {
       return h('div', { class: 'table-title-cell' }, [
@@ -173,24 +187,28 @@ const columns: DataTableColumns<AdminNovelSummary> = [
   {
     title: '类型',
     key: 'genre',
+    width: 128,
     render(row) {
       return h(
         NTag,
         { type: 'info', size: 'small', round: true, bordered: false },
-        { default: () => row.genre || '未分类' }
+        { default: () => (row.genre || '未分类') }
       )
     }
   },
   {
     title: '创作者',
     key: 'owner_username',
+    width: 140,
+    ellipsis: { tooltip: true },
     render(row) {
-      return h('span', { class: 'table-owner' }, row.owner_username)
+      return h('span', { class: 'table-owner' }, row.owner_username || '未知')
     }
   },
   {
     title: '进度',
     key: 'progress',
+    width: 98,
     render(row) {
       return h('span', { class: 'table-progress' }, formatProgress(row))
     }
@@ -198,6 +216,7 @@ const columns: DataTableColumns<AdminNovelSummary> = [
   {
     title: '最近更新',
     key: 'last_edited',
+    width: 170,
     render(row) {
       return h('span', { class: 'table-date' }, formatDate(row.last_edited))
     }
@@ -205,6 +224,7 @@ const columns: DataTableColumns<AdminNovelSummary> = [
   {
     title: '操作',
     key: 'actions',
+    width: 88,
     align: 'center',
     render(row) {
       return h(
