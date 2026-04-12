@@ -349,6 +349,67 @@ def _schedule_finalize_task(
     )
 
 
+async def _generate_chapter_pipeline_async(
+    project_id: str,
+    chapter_number: int,
+    writing_notes: Optional[str],
+    user_id: int,
+) -> None:
+    async with AsyncSessionLocal() as bg_session:
+        orchestrator = PipelineOrchestrator(bg_session)
+        novel_service = NovelService(bg_session)
+        try:
+            await orchestrator.generate_chapter(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writing_notes=writing_notes,
+                user_id=user_id,
+                flow_config={"preset": "basic"},
+            )
+            logger.info(
+                "异步章节生成完成: project_id=%s chapter=%s user_id=%s",
+                project_id,
+                chapter_number,
+                user_id,
+            )
+        except Exception as exc:
+            logger.exception(
+                "异步章节生成失败: project_id=%s chapter=%s user_id=%s error=%s",
+                project_id,
+                chapter_number,
+                user_id,
+                exc,
+            )
+            try:
+                chapter = await novel_service.get_or_create_chapter(project_id, chapter_number)
+                chapter.status = ChapterGenerationStatus.FAILED.value
+                await bg_session.commit()
+            except Exception:
+                await bg_session.rollback()
+                logger.exception(
+                    "异步章节生成失败后写回状态失败: project_id=%s chapter=%s user_id=%s",
+                    project_id,
+                    chapter_number,
+                    user_id,
+                )
+
+
+def _schedule_generate_chapter_task(
+    project_id: str,
+    chapter_number: int,
+    writing_notes: Optional[str],
+    user_id: int,
+) -> None:
+    asyncio.create_task(
+        _generate_chapter_pipeline_async(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            writing_notes=writing_notes,
+            user_id=user_id,
+        )
+    )
+
+
 @router.post("/advanced/generate", response_model=AdvancedGenerateResponse)
 async def advanced_generate_chapter(
     request: AdvancedGenerateRequest,
@@ -453,6 +514,7 @@ async def finalize_chapter(
 async def generate_chapter(
     project_id: str,
     request: GenerateChapterRequest,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
     current_user: UserInDB = Depends(get_current_user),
 ) -> NovelProjectSchema:
@@ -464,6 +526,45 @@ async def generate_chapter(
     4. L3 Writer: 生成正文（使用 writing_v2 提示词）
     5. 护栏检查：检测并修复违规内容
     """
+    force_sync_generation = os.getenv("WRITER_FORCE_SYNC_GENERATION", "").strip().lower() in {"1", "true", "yes", "on"}
+    if not force_sync_generation:
+        novel_service = NovelService(session)
+        await novel_service.ensure_project_owner(project_id, current_user.id)
+
+        outline = await novel_service.get_outline(project_id, request.chapter_number)
+        if not outline:
+            logger.warning("项目 %s 未找到第 %s 章纲要，异步生成任务未创建", project_id, request.chapter_number)
+            raise HTTPException(status_code=404, detail="蓝图中未找到对应章节纲要")
+
+        chapter = await novel_service.get_or_create_chapter(project_id, request.chapter_number)
+        if chapter.status == ChapterGenerationStatus.GENERATING.value:
+            logger.info(
+                "项目 %s 第 %s 章已在生成中，复用现有异步任务状态",
+                project_id,
+                request.chapter_number,
+            )
+            return await _load_project_schema(novel_service, project_id, current_user.id)
+
+        chapter.real_summary = None
+        chapter.selected_version_id = None
+        chapter.status = ChapterGenerationStatus.GENERATING.value
+        await session.commit()
+
+        background_tasks.add_task(
+            _schedule_generate_chapter_task,
+            project_id,
+            request.chapter_number,
+            request.writing_notes,
+            current_user.id,
+        )
+        logger.info(
+            "项目 %s 第 %s 章异步生成任务已提交，用户 %s",
+            project_id,
+            request.chapter_number,
+            current_user.id,
+        )
+        return await _load_project_schema(novel_service, project_id, current_user.id)
+
     novel_service = NovelService(session)
     prompt_service = PromptService(session)
     llm_service = LLMService(session)
