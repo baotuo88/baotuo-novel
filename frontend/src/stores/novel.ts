@@ -1,7 +1,15 @@
 // AIMETA P=小说状态_当前小说数据管理|R=currentNovel_chapters_fetch|NR=不含API调用|E=store:novel|X=internal|A=useNovelStore|D=pinia|S=none|RD=./README.ai
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { NovelProject, NovelProjectSummary, ConverseResponse, BlueprintGenerationResponse, Blueprint, DeleteNovelsResponse, ChapterOutline } from '@/api/novel'
+import type {
+  NovelProject,
+  NovelProjectSummary,
+  ConverseResponse,
+  BlueprintGenerationResponse,
+  Blueprint,
+  DeleteNovelsResponse,
+  ChapterOutline
+} from '@/api/novel'
 import { NovelAPI } from '@/api/novel'
 
 export const useNovelStore = defineStore('novel', () => {
@@ -12,6 +20,8 @@ export const useNovelStore = defineStore('novel', () => {
   const isLoading = ref(false)
   const error = ref<string | null>(null)
   const pendingChapterEdits = new Map<string, string>()
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
   // Getters
   const projectsCount = computed(() => projects.value.length)
@@ -117,7 +127,44 @@ export const useNovelStore = defineStore('novel', () => {
       if (!currentProject.value) {
         throw new Error('没有当前项目')
       }
-      return await NovelAPI.generateBlueprint(currentProject.value.id)
+      const projectId = currentProject.value.id
+
+      // 优先走异步任务，避免网关/代理层长请求超时（504）
+      try {
+        const accepted = await NovelAPI.startGenerateBlueprint(projectId)
+        const pollIntervalSeconds = Math.max(2, accepted.poll_interval_seconds || 5)
+        const maxWaitMs = 10 * 60 * 1000 // 最长等待 10 分钟
+        const deadline = Date.now() + maxWaitMs
+
+        while (Date.now() < deadline) {
+          await sleep(pollIntervalSeconds * 1000)
+          const status = await NovelAPI.getBlueprintGenerationStatus(projectId)
+
+          if (status.status === 'generating' || status.status === 'not_started') {
+            continue
+          }
+
+          if (status.status === 'completed' && status.blueprint) {
+            return {
+              blueprint: status.blueprint,
+              ai_message: status.ai_message || '蓝图生成完成。'
+            }
+          }
+
+          if (status.status === 'failed') {
+            throw new Error(status.error_message || '蓝图生成失败，请稍后重试')
+          }
+        }
+
+        throw new Error('蓝图生成超时，请稍后再试')
+      } catch (asyncErr) {
+        // 兼容旧后端（未部署新接口）时回退到同步接口
+        const msg = asyncErr instanceof Error ? asyncErr.message : String(asyncErr)
+        if (msg.includes('状态码: 404') || msg.includes('404') || msg.includes('Not Found')) {
+          return await NovelAPI.generateBlueprint(projectId)
+        }
+        throw asyncErr
+      }
     } catch (err) {
       error.value = err instanceof Error ? err.message : '生成蓝图失败'
       throw err

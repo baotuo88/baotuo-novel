@@ -124,6 +124,21 @@ export interface BlueprintGenerationResponse {
   ai_message: string
 }
 
+export interface BlueprintGenerationAsyncAccepted {
+  project_id: string
+  status: 'accepted' | 'running'
+  message: string
+  poll_interval_seconds: number
+}
+
+export interface BlueprintGenerationStatusResponse {
+  project_id: string
+  status: 'not_started' | 'generating' | 'completed' | 'failed'
+  blueprint?: Blueprint | null
+  ai_message?: string | null
+  error_message?: string | null
+}
+
 export interface UIControl {
   type: 'single_choice' | 'text_input'
   options?: Array<{ id: string; label: string }>
@@ -256,6 +271,16 @@ export class NovelAPI {
     return request(`${NOVELS_BASE}/${projectId}/blueprint/generate`, {
       method: 'POST'
     })
+  }
+
+  static async startGenerateBlueprint(projectId: string): Promise<BlueprintGenerationAsyncAccepted> {
+    return request(`${NOVELS_BASE}/${projectId}/blueprint/generate-async`, {
+      method: 'POST'
+    })
+  }
+
+  static async getBlueprintGenerationStatus(projectId: string): Promise<BlueprintGenerationStatusResponse> {
+    return request(`${NOVELS_BASE}/${projectId}/blueprint/status`)
   }
 
   static async saveBlueprint(projectId: string, blueprint: Blueprint): Promise<NovelProject> {

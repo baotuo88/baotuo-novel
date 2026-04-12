@@ -152,7 +152,7 @@ const novelStore = useNovelStore()
 const isGenerating = ref(false)
 const progress = ref(0)
 const timeElapsed = ref(0)
-const maxTime = 180 // 180秒超时
+const maxTime = 600 // 600秒超时（异步蓝图生成轮询）
 
 let progressTimer: NodeJS.Timeout | null = null
 let timeoutTimer: NodeJS.Timeout | null = null
@@ -207,7 +207,7 @@ const generateBlueprint = async () => {
     }
   }, 100)
 
-  // 60秒超时
+  // 超时保护（与 maxTime 保持一致）
   timeoutTimer = setTimeout(() => {
     clearTimers()
     isGenerating.value = false

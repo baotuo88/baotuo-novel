@@ -1,6 +1,6 @@
 # AIMETA P=小说模式_小说和章节请求响应|R=小说结构_章节结构|NR=不含业务逻辑|E=NovelSchema_ChapterSchema|X=internal|A=Pydantic模式|D=pydantic|S=none|RD=./README.ai
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -110,6 +110,21 @@ class NovelProjectSummary(BaseModel):
 class BlueprintGenerationResponse(BaseModel):
     blueprint: Blueprint
     ai_message: str
+
+
+class BlueprintGenerationAsyncAccepted(BaseModel):
+    project_id: str
+    status: Literal["accepted", "running"]
+    message: str
+    poll_interval_seconds: int = 5
+
+
+class BlueprintGenerationStatusResponse(BaseModel):
+    project_id: str
+    status: Literal["not_started", "generating", "completed", "failed"]
+    blueprint: Optional[Blueprint] = None
+    ai_message: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 class ChapterGenerationResponse(BaseModel):
