@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -74,6 +75,24 @@ def _extract_tail_excerpt(text: Optional[str], limit: int = 500) -> str:
     if len(stripped) <= limit:
         return stripped
     return stripped[-limit:]
+
+
+def _resolve_stale_generation_seconds() -> int:
+    raw = os.getenv("WRITER_GENERATING_STALE_SECONDS", "300").strip()
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return 300
+
+
+def _compute_age_seconds(ts: Optional[datetime]) -> Optional[float]:
+    if not ts:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    else:
+        ts = ts.astimezone(timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
 
 
 async def _resolve_version_count(session: AsyncSession) -> int:
@@ -556,12 +575,25 @@ async def generate_chapter(
 
         chapter = await novel_service.get_or_create_chapter(project_id, request.chapter_number)
         if chapter.status == ChapterGenerationStatus.GENERATING.value:
-            logger.info(
-                "项目 %s 第 %s 章已在生成中，复用现有异步任务状态",
-                project_id,
-                request.chapter_number,
-            )
-            return await _load_project_schema(novel_service, project_id, current_user.id)
+            stale_seconds = _resolve_stale_generation_seconds()
+            age_seconds = _compute_age_seconds(chapter.updated_at or chapter.created_at)
+            if age_seconds is not None and age_seconds >= stale_seconds:
+                logger.warning(
+                    "检测到疑似卡死生成任务，自动回写失败状态并重新生成: project_id=%s chapter=%s age=%ss threshold=%ss",
+                    project_id,
+                    request.chapter_number,
+                    int(age_seconds),
+                    stale_seconds,
+                )
+                chapter.status = ChapterGenerationStatus.FAILED.value
+                await session.commit()
+            else:
+                logger.info(
+                    "项目 %s 第 %s 章已在生成中，复用现有异步任务状态",
+                    project_id,
+                    request.chapter_number,
+                )
+                return await _load_project_schema(novel_service, project_id, current_user.id)
 
         chapter.real_summary = None
         chapter.selected_version_id = None

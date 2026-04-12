@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
@@ -77,6 +79,22 @@ def _clean_string(text: str, parse_json: bool = True) -> str:
         .replace("\\\\", "\\")
     )
 
+
+def _resolve_stale_generation_seconds() -> int:
+    raw = os.getenv("WRITER_GENERATING_STALE_SECONDS", "300").strip()
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return 300
+
+
+def _to_utc_aware(ts: Optional[datetime]) -> Optional[datetime]:
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
 from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import selectinload
@@ -105,6 +123,8 @@ from ..schemas.novel import (
     NovelSectionResponse,
     NovelSectionType,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class NovelService:
@@ -140,6 +160,7 @@ class NovelService:
 
     async def get_project_schema(self, project_id: str, user_id: int) -> NovelProjectSchema:
         project = await self.ensure_project_owner(project_id, user_id)
+        await self._recover_stale_chapter_statuses(project)
         return await self._serialize_project(project)
 
     async def get_section_data(
@@ -149,6 +170,7 @@ class NovelService:
         section: NovelSectionType,
     ) -> NovelSectionResponse:
         project = await self.ensure_project_owner(project_id, user_id)
+        await self._recover_stale_chapter_statuses(project)
         return self._build_section_response(project, section)
 
     async def get_chapter_schema(
@@ -158,7 +180,37 @@ class NovelService:
         chapter_number: int,
     ) -> ChapterSchema:
         project = await self.ensure_project_owner(project_id, user_id)
+        await self._recover_stale_chapter_statuses(project)
         return self._build_chapter_schema(project, chapter_number)
+
+    async def _recover_stale_chapter_statuses(self, project: NovelProject) -> None:
+        stale_seconds = _resolve_stale_generation_seconds()
+        now = datetime.now(timezone.utc)
+        stale_items: List[tuple[int, int]] = []
+        for chapter in project.chapters:
+            if (chapter.status or "").strip() != ChapterGenerationStatus.GENERATING.value:
+                continue
+            chapter_ts = _to_utc_aware(chapter.updated_at or chapter.created_at)
+            if chapter_ts is None:
+                continue
+            age_seconds = int(max(0.0, (now - chapter_ts).total_seconds()))
+            if age_seconds < stale_seconds:
+                continue
+            chapter.status = ChapterGenerationStatus.FAILED.value
+            stale_items.append((chapter.chapter_number, age_seconds))
+
+        if not stale_items:
+            return
+
+        await self.session.commit()
+        for chapter_number, age_seconds in stale_items:
+            logger.warning(
+                "检测到超时章节生成状态，已自动回写 failed: project_id=%s chapter=%s age=%ss threshold=%ss",
+                project.id,
+                chapter_number,
+                age_seconds,
+                stale_seconds,
+            )
 
     async def list_projects_for_user(self, user_id: int) -> List[NovelProjectSummary]:
         projects = await self.repo.list_by_user(user_id)
