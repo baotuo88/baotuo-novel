@@ -4,8 +4,8 @@
     <div class="md-card md-card-elevated h-full flex flex-col" style="border-radius: var(--md-radius-xl);">
       <!-- 章节工作区头部 -->
       <div v-if="selectedChapterNumber" class="md-card-header flex-shrink-0">
-        <div class="flex items-center justify-between">
-          <div>
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div class="min-w-0">
             <div class="flex items-center gap-3 mb-2">
               <h2 class="md-title-large font-semibold">第{{ selectedChapterNumber }}章</h2>
               <span
@@ -23,7 +23,7 @@
             <p class="md-body-small md-on-surface-variant">{{ selectedChapterOutline?.summary || '暂无章节描述' }}</p>
           </div>
 
-          <div class="flex items-center gap-2">
+          <div class="flex w-full sm:w-auto items-center justify-end flex-wrap gap-2">
             <button
               v-if="isChapterCompleted(selectedChapterNumber)"
               @click="openEditModal"

@@ -14,7 +14,7 @@
         'md-card md-card-elevated transition-all duration-300 h-full',
         'lg:relative lg:translate-x-0 lg:w-80 lg:flex-shrink-0',
         sidebarOpen
-          ? 'fixed left-4 top-20 bottom-4 w-80 z-50 translate-x-0'
+          ? 'fixed left-4 right-4 top-20 bottom-4 z-50 translate-x-0 lg:right-auto lg:w-80'
           : 'lg:w-80 lg:flex-shrink-0 -translate-x-full absolute lg:relative'
       ]"
       style="border-radius: var(--md-radius-xl);"
@@ -137,83 +137,82 @@
                       <p class="md-body-small md-on-surface-variant line-clamp-2 leading-relaxed">{{ chapter.summary }}</p>
                     </Tooltip>
 
-                    <!-- 章节状态 -->
-                    <div class="mt-2 flex items-center gap-2">
-                      <span
-                        v-if="isChapterCompleted(chapter.chapter_number)"
-                        class="md-chip"
-                        style="background-color: var(--md-success-container); color: var(--md-on-success-container);"
-                      >
-                        已完成
-                      </span>
-                      <span
-                        v-else-if="isChapterGenerating(chapter.chapter_number)"
-                        class="md-chip animate-pulse"
-                        style="background-color: var(--md-primary-container); color: var(--md-on-primary-container);"
-                      >
-                        生成中...
-                      </span>
-                      <span
-                        v-else-if="isChapterSelecting(chapter.chapter_number)"
-                        class="md-chip animate-pulse"
-                        style="background-color: var(--md-primary-container); color: var(--md-on-primary-container);"
-                      >
-                        选择中...
-                      </span>
-                      <span
-                        v-else-if="isChapterEvaluating(chapter.chapter_number)"
-                        class="md-chip animate-pulse"
-                        style="background-color: var(--md-secondary-container); color: var(--md-on-secondary-container);"
-                      >
-                        评审中...
-                      </span>
-                      <span
-                        v-else-if="isChapterFailed(chapter.chapter_number)"
-                        class="md-chip"
-                        style="background-color: var(--md-error-container); color: var(--md-on-error-container);"
-                      >
-                        生成失败
-                      </span>
-                      <span
-                        v-else-if="hasChapterInProgress(chapter.chapter_number)"
-                        class="md-chip"
-                        style="background-color: var(--md-warning-container); color: var(--md-on-warning-container);"
-                      >
-                        待选择版本
-                      </span>
-                      <span v-else class="md-chip md-chip-assist">未开始</span>
-                    </div>
-                  </div>
+                    <div class="mt-2 flex items-center justify-between gap-2 flex-wrap">
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span
+                          v-if="isChapterCompleted(chapter.chapter_number)"
+                          class="md-chip m3-status-chip"
+                          style="background-color: var(--md-success-container); color: var(--md-on-success-container);"
+                        >
+                          已完成
+                        </span>
+                        <span
+                          v-else-if="isChapterGenerating(chapter.chapter_number)"
+                          class="md-chip m3-status-chip animate-pulse"
+                          style="background-color: var(--md-primary-container); color: var(--md-on-primary-container);"
+                        >
+                          生成中...
+                        </span>
+                        <span
+                          v-else-if="isChapterSelecting(chapter.chapter_number)"
+                          class="md-chip m3-status-chip animate-pulse"
+                          style="background-color: var(--md-primary-container); color: var(--md-on-primary-container);"
+                        >
+                          选择中...
+                        </span>
+                        <span
+                          v-else-if="isChapterEvaluating(chapter.chapter_number)"
+                          class="md-chip m3-status-chip animate-pulse"
+                          style="background-color: var(--md-secondary-container); color: var(--md-on-secondary-container);"
+                        >
+                          评审中...
+                        </span>
+                        <span
+                          v-else-if="isChapterFailed(chapter.chapter_number)"
+                          class="md-chip m3-status-chip"
+                          style="background-color: var(--md-error-container); color: var(--md-on-error-container);"
+                        >
+                          生成失败
+                        </span>
+                        <span
+                          v-else-if="hasChapterInProgress(chapter.chapter_number)"
+                          class="md-chip m3-status-chip"
+                          style="background-color: var(--md-warning-container); color: var(--md-on-warning-container);"
+                        >
+                          待选择版本
+                        </span>
+                        <span v-else class="md-chip md-chip-assist m3-status-chip">未开始</span>
+                      </div>
 
-                  <!-- 章节操作按钮 -->
-                  <div class="flex items-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                    <button
-                      v-if="!isChapterCompleted(chapter.chapter_number)"
-                      @click.stop="$emit('editChapter', chapter)"
-                      class="md-icon-btn md-ripple"
-                      title="编辑大纲"
-                    >
-                      <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                        <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z"></path>
-                        <path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clip-rule="evenodd"></path>
-                      </svg>
-                    </button>
-                    <button
-                      v-if="canGenerateChapter(chapter.chapter_number) || isChapterFailed(chapter.chapter_number) || hasChapterInProgress(chapter.chapter_number)"
-                      @click.stop="confirmGenerateChapter(chapter.chapter_number)"
-                      :disabled="generatingChapter === chapter.chapter_number || isChapterGenerating(chapter.chapter_number)"
-                      class="md-icon-btn md-ripple disabled:opacity-50"
-                      style="color: var(--md-primary);"
-                      :title="isChapterCompleted(chapter.chapter_number) ? '重新生成' : isChapterFailed(chapter.chapter_number) ? '重试' : hasChapterInProgress(chapter.chapter_number) ? '重新生成版本' : '开始创作'"
-                    >
-                      <svg v-if="generatingChapter === chapter.chapter_number || isChapterGenerating(chapter.chapter_number)" class="w-4 h-4 animate-spin" fill="currentColor" viewBox="0 0 20 20">
-                        <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"></path>
-                      </svg>
-                      <svg v-else class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                        <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"></path>
-                      </svg>
-                    </button>
-                    <!-- Batch delete replaces the single delete button -->
+                      <div class="flex items-center gap-1">
+                        <button
+                          v-if="!isChapterCompleted(chapter.chapter_number)"
+                          @click.stop="$emit('editChapter', chapter)"
+                          class="md-icon-btn md-ripple m3-chapter-action-btn"
+                          title="编辑大纲"
+                        >
+                          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z"></path>
+                            <path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clip-rule="evenodd"></path>
+                          </svg>
+                        </button>
+                        <button
+                          v-if="canGenerateChapter(chapter.chapter_number) || isChapterFailed(chapter.chapter_number) || hasChapterInProgress(chapter.chapter_number)"
+                          @click.stop="confirmGenerateChapter(chapter.chapter_number)"
+                          :disabled="generatingChapter === chapter.chapter_number || isChapterGenerating(chapter.chapter_number)"
+                          class="md-icon-btn md-ripple m3-chapter-action-btn disabled:opacity-50"
+                          style="color: var(--md-primary);"
+                          :title="isChapterCompleted(chapter.chapter_number) ? '重新生成' : isChapterFailed(chapter.chapter_number) ? '重试' : hasChapterInProgress(chapter.chapter_number) ? '重新生成版本' : '开始创作'"
+                        >
+                          <svg v-if="generatingChapter === chapter.chapter_number || isChapterGenerating(chapter.chapter_number)" class="w-4 h-4 animate-spin" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"></path>
+                          </svg>
+                          <svg v-else class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"></path>
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -458,6 +457,27 @@ const canGenerateChapter = (chapterNumber: number) => {
 
 .m3-stagger {
   animation: m3-rise 0.45s ease-out both;
+}
+
+.m3-status-chip {
+  min-height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: default;
+}
+
+.m3-chapter-action-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 10px;
+}
+
+.m3-chapter-action-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 @keyframes m3-rise {
