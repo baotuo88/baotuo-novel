@@ -12,7 +12,6 @@ Writer API Router - 人类化起点长篇写作系统
 2. 跨章 1234 逻辑：通过 ChapterMission 控制每章只写一个节拍
 3. 后置护栏检查：自动检测并修复违规内容
 """
-import asyncio
 import json
 import logging
 import os
@@ -331,21 +330,19 @@ async def _finalize_chapter_async(
         )
 
 
-def _schedule_finalize_task(
+async def _schedule_finalize_task(
     project_id: str,
     chapter_number: int,
     selected_version_id: int,
     user_id: int,
     skip_vector_update: bool = False,
 ) -> None:
-    asyncio.create_task(
-        _finalize_chapter_async(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            selected_version_id=selected_version_id,
-            user_id=user_id,
-            skip_vector_update=skip_vector_update,
-        )
+    await _finalize_chapter_async(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        selected_version_id=selected_version_id,
+        user_id=user_id,
+        skip_vector_update=skip_vector_update,
     )
 
 
@@ -392,22 +389,6 @@ async def _generate_chapter_pipeline_async(
                     chapter_number,
                     user_id,
                 )
-
-
-def _schedule_generate_chapter_task(
-    project_id: str,
-    chapter_number: int,
-    writing_notes: Optional[str],
-    user_id: int,
-) -> None:
-    asyncio.create_task(
-        _generate_chapter_pipeline_async(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            writing_notes=writing_notes,
-            user_id=user_id,
-        )
-    )
 
 
 @router.post("/advanced/generate", response_model=AdvancedGenerateResponse)
@@ -551,7 +532,7 @@ async def generate_chapter(
         await session.commit()
 
         background_tasks.add_task(
-            _schedule_generate_chapter_task,
+            _generate_chapter_pipeline_async,
             project_id,
             request.chapter_number,
             request.writing_notes,
