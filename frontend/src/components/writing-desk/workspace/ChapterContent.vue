@@ -373,12 +373,14 @@ const applyOptimization = async () => {
 .m3-optimizer-dialog {
   max-width: min(720px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   border-radius: var(--md-radius-xl);
 }
 
 .m3-result-dialog {
   max-width: min(900px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   border-radius: var(--md-radius-xl);
 }
 

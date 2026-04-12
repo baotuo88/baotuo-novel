@@ -3,7 +3,7 @@
   <div class="platform-shell relative">
     <!-- Material 3 Update Log Modal -->
     <div v-if="showModal" class="md-dialog-overlay" @click.self="closeModal">
-      <div class="md-dialog entry-log-dialog w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
+      <div class="md-dialog entry-log-dialog w-full max-w-4xl mx-4 max-h-[90dvh] flex flex-col">
         <!-- Header -->
         <div class="md-dialog-header border-b" style="border-color: var(--md-outline-variant);">
           <h1 class="md-headline-medium text-center" style="color: var(--md-on-surface);">更新日志</h1>
@@ -17,7 +17,7 @@
         </div>
 
         <!-- Timeline Content -->
-        <div class="px-6 py-6 overflow-y-auto flex-1">
+        <div class="px-6 py-6 overflow-y-auto flex-1 min-h-0">
           <div class="flow-root">
             <ul role="list" class="-mb-8">
               <li v-for="(log, index) in pagedUpdateLogs" :key="log.id">
@@ -348,6 +348,7 @@ const goToWorkspace = () => {
   .entry-log-dialog {
     margin-inline: 12px;
     max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
   }
 }
 </style>

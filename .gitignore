@@ -6,6 +6,7 @@
 *.pyc
 /backend/dist
 /backend/storage/*.db
+.DS_Store
 
 # 环境变量文件
 .env

@@ -1,6 +1,6 @@
 <!-- AIMETA P=写作台_章节编辑主页面|R=写作界面_章节管理|NR=不含详情展示|E=route:/novel/:id#component:WritingDesk|X=ui|A=写作台|D=vue|S=dom,net|RD=./README.ai -->
 <template>
-  <div class="m3-shell h-screen flex flex-col overflow-hidden">
+  <div class="m3-shell h-[100dvh] flex flex-col overflow-hidden">
     <WDHeader
       :project="project"
       :progress="progress"
@@ -12,7 +12,7 @@
     />
 
     <!-- 主要内容区域 -->
-    <div class="flex-1 w-full px-4 sm:px-6 lg:px-8 py-6 overflow-hidden">
+    <div class="flex-1 min-h-0 w-full px-4 sm:px-6 lg:px-8 py-6 overflow-hidden">
       <!-- 加载状态 -->
       <div v-if="novelStore.isLoading" class="h-full flex justify-center items-center">
         <div class="text-center">
@@ -36,7 +36,7 @@
       </div>
 
       <!-- 主要内容 -->
-      <div v-else-if="project" class="h-full flex gap-6">
+      <div v-else-if="project" class="h-full min-h-0 flex gap-6">
         <WDSidebar
           :project="project"
           :sidebar-open="sidebarOpen"
@@ -52,7 +52,7 @@
           @generate-outline="generateOutline"
         />
 
-        <div class="flex-1 min-w-0">
+        <div class="flex-1 min-w-0 min-h-0">
           <WDWorkspace
             :project="project"
             :selected-chapter-number="selectedChapterNumber"

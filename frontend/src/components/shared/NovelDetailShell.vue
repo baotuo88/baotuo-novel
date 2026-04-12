@@ -1,6 +1,6 @@
 <!-- AIMETA P=小说详情壳_详情页布局容器|R=详情页布局_导航|NR=不含具体内容|E=component:NovelDetailShell|X=internal|A=布局组件|D=vue|S=dom|RD=./README.ai -->
 <template>
-  <div class="h-screen flex flex-col overflow-hidden md-surface">
+  <div class="h-[100dvh] flex flex-col overflow-hidden md-surface">
     <!-- Material 3 Top App Bar -->
     <header class="md-top-app-bar sticky top-0 z-40">
       <div class="max-w-[1800px] mx-auto w-full flex items-center px-4 h-16">

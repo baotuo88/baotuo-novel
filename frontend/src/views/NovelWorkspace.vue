@@ -1,6 +1,6 @@
 <!-- AIMETA P=小说工作区_小说列表管理|R=小说列表_创建|NR=不含章节编辑|E=route:/workspace#component:NovelWorkspace|X=ui|A=工作区|D=vue|S=dom,net|RD=./README.ai -->
 <template>
-  <div class="flex items-center justify-center min-h-screen p-4 md-surface-dim">
+  <div class="flex items-center justify-center min-h-[100dvh] p-4 md-surface-dim">
     <!-- Material 3 Snackbar for delete message -->
     <transition
       enter-active-class="transition-all duration-300"

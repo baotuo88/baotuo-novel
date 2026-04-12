@@ -1,7 +1,7 @@
 <!-- AIMETA P=灵感模式_AI对话创作|R=对话创作界面|NR=不含写作台功能|E=route:/inspiration#component:InspirationMode|X=ui|A=对话界面|D=vue|S=dom,net|RD=./README.ai -->
 <template>
-  <div class="flex items-center justify-center min-h-screen p-4">
-    <div class="w-full max-w-6xl mx-auto">
+  <div class="flex items-stretch justify-center min-h-[100dvh] p-3 sm:p-4 md:items-center">
+    <div class="w-full max-w-6xl mx-auto min-h-0">
       <!-- 灵感模式入口界面 -->
       <div v-if="!conversationStarted" class="text-center p-8 bg-white/70 backdrop-blur-xl rounded-2xl shadow-lg fade-in">
         <h1 class="text-4xl md:text-5xl font-bold text-gray-800">小说家的新篇章</h1>
@@ -26,10 +26,10 @@
       <!-- 灵感模式交互界面 -->
       <div
         v-else-if="!showBlueprintConfirmation && !showBlueprint"
-        class="h-[90vh] max-h-[950px] flex flex-col bg-white rounded-2xl shadow-2xl overflow-hidden fade-in"
+        class="w-full h-[calc(100dvh-1.5rem)] sm:h-[calc(100dvh-2rem)] md:h-[90vh] max-h-[950px] min-h-0 flex flex-col bg-white rounded-2xl shadow-2xl overflow-hidden fade-in"
       >
         <!-- 头部 -->
-        <div class="p-4 border-b border-gray-200">
+        <div class="p-4 border-b border-gray-200 flex-shrink-0">
           <div class="flex justify-between items-center">
             <div class="flex items-center gap-2">
               <span class="relative flex h-3 w-3">
@@ -72,7 +72,7 @@
         </div>
 
         <!-- 聊天区域 -->
-        <div class="flex-1 p-6 overflow-y-auto space-y-6 relative" ref="chatArea">
+        <div class="flex-1 min-h-0 p-4 sm:p-6 overflow-y-auto space-y-6 relative" ref="chatArea">
           <transition name="fade">
             <InspirationLoading v-if="isInitialLoading" />
           </transition>
@@ -85,12 +85,17 @@
         </div>
 
         <!-- 输入区域 -->
-        <div class="p-4 border-t border-gray-200 bg-gray-50">
-          <ConversationInput
-            :ui-control="currentUIControl"
-            :loading="novelStore.isLoading"
-            @submit="handleUserInput"
-          />
+        <div
+          class="p-4 border-t border-gray-200 bg-gray-50 flex-shrink-0"
+          style="padding-bottom: max(1rem, env(safe-area-inset-bottom));"
+        >
+          <div class="max-h-[42dvh] overflow-y-auto pr-1">
+            <ConversationInput
+              :ui-control="currentUIControl"
+              :loading="novelStore.isLoading"
+              @submit="handleUserInput"
+            />
+          </div>
         </div>
       </div>
 

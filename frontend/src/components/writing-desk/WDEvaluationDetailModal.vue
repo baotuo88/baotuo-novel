@@ -128,6 +128,7 @@ const parseMarkdown = (text: string | null): string => {
 .m3-eval-dialog {
   max-width: min(960px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   border-radius: var(--md-radius-xl);
 }
 </style>

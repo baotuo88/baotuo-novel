@@ -13,7 +13,7 @@
         enter-from-class="opacity-0 scale-95"
         leave-to-class="opacity-0 scale-95"
       >
-        <div class="md-dialog w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col">
+        <div class="md-dialog w-full max-w-2xl mx-4 max-h-[90dvh] flex flex-col">
           <!-- Material 3 Dialog Header -->
           <div class="md-dialog-header flex items-center justify-between">
             <h3 class="md-dialog-title">编辑 {{ title }}</h3>
@@ -29,7 +29,7 @@
           </div>
 
           <!-- Dialog Content -->
-          <div class="md-dialog-content flex-1 overflow-y-auto py-4">
+          <div class="md-dialog-content flex-1 min-h-0 overflow-y-auto py-4">
             <ChapterOutlineEditor v-if="props.field === 'chapter_outline'" v-model="editableContent" />
             <KeyLocationsEditor v-else-if="props.field === 'world_setting.key_locations'" v-model="editableContent" />
             <CharactersEditor v-else-if="props.field === 'characters'" v-model="editableContent" />

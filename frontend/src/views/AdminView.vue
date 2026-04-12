@@ -248,6 +248,7 @@ watch(
 
 .admin-layout {
   height: calc(100vh - 32px);
+  height: calc(100dvh - 32px);
   border-radius: 26px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 82%, transparent);
@@ -555,6 +556,7 @@ watch(
 
   .admin-layout {
     height: calc(100vh - 24px);
+    height: calc(100dvh - 24px);
   }
 
   .admin-header {
