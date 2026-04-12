@@ -1,6 +1,7 @@
 # AIMETA P=小说API_项目和章节管理|R=小说CRUD_章节管理|NR=不含内容生成|E=route:GET_POST_/api/novels/*|X=http|A=小说CRUD_章节|D=fastapi,sqlalchemy|S=db|RD=./README.ai
 import json
 import logging
+import os
 from typing import Dict, List
 
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, status
@@ -53,6 +54,15 @@ def _ensure_prompt(prompt: str | None, name: str) -> str:
     if not prompt:
         raise HTTPException(status_code=500, detail=f"未配置名为 {name} 的提示词，请联系管理员")
     return prompt
+
+
+def _resolve_blueprint_timeout_seconds() -> float:
+    raw = os.getenv("BLUEPRINT_GENERATE_TIMEOUT_SECONDS", "420").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 420.0
+    return max(60.0, min(540.0, value))
 
 
 @router.post("", response_model=NovelProjectSchema, status_code=status.HTTP_201_CREATED)
@@ -260,13 +270,17 @@ async def generate_blueprint(
         )
 
     system_prompt = _ensure_prompt(await prompt_service.get_prompt("screenwriting"), "screenwriting")
+    blueprint_timeout = _resolve_blueprint_timeout_seconds()
     blueprint_raw = await llm_service.get_llm_response(
         system_prompt=system_prompt,
         conversation_history=formatted_history,
         temperature=0.3,
         user_id=current_user.id,
-        timeout=480.0,
+        timeout=blueprint_timeout,
         project_id=project_id,
+        request_type="blueprint",
+        max_retries_override=0,
+        allow_fallback_models=False,
     )
     blueprint_raw = remove_think_tags(blueprint_raw)
 

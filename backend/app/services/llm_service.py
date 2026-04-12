@@ -86,6 +86,8 @@ class LLMService:
         top_p: Optional[float] = None,
         request_type: str = "chat",
         project_id: Optional[str] = None,
+        max_retries_override: Optional[int] = None,
+        allow_fallback_models: bool = True,
     ) -> str:
         messages = [{"role": "system", "content": system_prompt}, *conversation_history]
         return await self._stream_and_collect(
@@ -98,6 +100,8 @@ class LLMService:
             top_p=top_p,
             request_type=request_type,
             project_id=project_id,
+            max_retries_override=max_retries_override,
+            allow_fallback_models=allow_fallback_models,
         )
 
     async def generate(
@@ -169,6 +173,8 @@ class LLMService:
         top_p: Optional[float] = None,
         request_type: str = "chat",
         project_id: Optional[str] = None,
+        max_retries_override: Optional[int] = None,
+        allow_fallback_models: bool = True,
     ) -> str:
         start_at = time.perf_counter()
         input_chars = sum(len(item.get("content") or "") for item in messages)
@@ -233,9 +239,14 @@ class LLMService:
         client = LLMClient(api_key=config["api_key"], base_url=config.get("base_url"))
         chat_messages = [ChatMessage(role=msg["role"], content=msg["content"]) for msg in messages]
 
-        max_retries = await self._get_int_config("llm.retry.max_retries", default=1, min_value=0, max_value=4)
+        if max_retries_override is None:
+            max_retries = await self._get_int_config("llm.retry.max_retries", default=1, min_value=0, max_value=4)
+        else:
+            max_retries = max(0, min(4, int(max_retries_override)))
         backoff_ms = await self._get_int_config("llm.retry.backoff_ms", default=600, min_value=100, max_value=10_000)
         model_candidates = await self._get_model_candidates(model_name)
+        if not allow_fallback_models and model_candidates:
+            model_candidates = model_candidates[:1]
         budget_filtered_candidates: List[str] = []
         budget_block_detail: Optional[str] = None
         for candidate in model_candidates:
