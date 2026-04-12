@@ -213,13 +213,23 @@
 
         <n-data-table
           :columns="columns"
-          :data="configs"
+          :data="pagedConfigs"
           :loading="configLoading"
-          :pagination="configPagination"
+          :pagination="false"
           :bordered="false"
           :row-key="rowKey"
           class="config-table"
         />
+        <div v-if="configs.length > configPagination.pageSize" class="config-pagination">
+          <n-pagination
+            v-model:page="configPagination.page"
+            v-model:page-size="configPagination.pageSize"
+            :page-count="configPageCount"
+            :page-sizes="configPagination.pageSizes"
+            show-size-picker
+            size="small"
+          />
+        </div>
       </n-spin>
     </n-card>
       </n-tab-pane>
@@ -311,6 +321,7 @@ import {
   NInput,
   NInputNumber,
   NModal,
+  NPagination,
   NPopconfirm,
   NSelect,
   NSpace,
@@ -534,6 +545,11 @@ const configPagination = reactive({
   showSizePicker: true,
   pageSizes: [10, 20, 50]
 })
+const configPageCount = computed(() => Math.max(1, Math.ceil(configs.value.length / configPagination.pageSize)))
+const pagedConfigs = computed<SystemConfig[]>(() => {
+  const start = (configPagination.page - 1) * configPagination.pageSize
+  return configs.value.slice(start, start + configPagination.pageSize)
+})
 
 const rowKey = (row: SystemConfig) => row.key
 
@@ -630,6 +646,15 @@ watch(
   () => overrideFilter.project_query,
   () => {
     projectOverridePagination.page = 1
+  }
+)
+
+watch(
+  [() => configs.value.length, () => configPagination.pageSize],
+  () => {
+    if (configPagination.page > configPageCount.value) {
+      configPagination.page = configPageCount.value
+    }
   }
 )
 
@@ -1327,6 +1352,12 @@ onBeforeUnmount(() => {
 
 .config-modal {
   max-width: min(640px, 92vw);
+}
+
+.config-pagination {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 @media (max-width: 767px) {
