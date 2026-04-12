@@ -118,6 +118,19 @@ docker compose -f deploy/docker-compose.yml up -d --build
 docker compose -f deploy/docker-compose.yml ps
 ```
 
+### 已部署项目更新命令（ARM/Linux）
+
+适用于你在项目根目录维护 `.env`，并通过 `cp .env deploy/.env` 同步到 Compose 环境文件的场景。
+
+```bash
+cd ~/baotuo-novel
+git pull origin main
+cp .env deploy/.env
+docker compose -f deploy/docker-compose.yml down
+docker compose -f deploy/docker-compose.yml up -d --build --force-recreate
+docker compose -f deploy/docker-compose.yml ps
+```
+
 ---
 
 ## 环境变量说明
