@@ -114,6 +114,30 @@ export const useAuthStore = defineStore('auth', {
         throw new Error(detail);
       }
     },
+    async forgotPassword(email: string) {
+      const response = await fetch(`${API_URL}/password/forgot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const detail = errorData.detail || '发送验证码失败';
+        throw new Error(detail);
+      }
+    },
+    async resetPassword(payload: { email: string; verification_code: string; new_password: string }) {
+      const response = await fetch(`${API_URL}/password/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const detail = errorData.detail || '重置密码失败';
+        throw new Error(detail);
+      }
+    },
     logout() {
       this.token = null;
       this.user = null;

@@ -11,7 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.config import settings
 from ...core.dependencies import get_current_user
 from ...db.session import get_session
-from ...schemas.user import AuthOptions, Token, User, UserInDB, UserRegistration
+from ...schemas.user import (
+    AuthOptions,
+    PasswordForgotRequest,
+    PasswordResetRequest,
+    Token,
+    User,
+    UserInDB,
+    UserRegistration,
+)
 from ...services.auth_service import AuthService
 
 
@@ -28,6 +36,18 @@ def get_auth_service(session: AsyncSession = Depends(get_session)) -> AuthServic
 async def send_verification_code(email: str, service: AuthService = Depends(get_auth_service)):
     await service.send_verification_code(email)
     logger.info("向 %s 发送验证码", email)
+
+
+@router.post("/password/forgot", status_code=204)
+async def send_password_reset_code(payload: PasswordForgotRequest, service: AuthService = Depends(get_auth_service)):
+    await service.send_password_reset_code(payload.email)
+    logger.info("忘记密码验证码请求：%s", payload.email)
+
+
+@router.post("/password/reset", status_code=204)
+async def reset_password(payload: PasswordResetRequest, service: AuthService = Depends(get_auth_service)):
+    await service.reset_password(payload)
+    logger.info("邮箱重置密码成功：%s", payload.email)
 
 
 @router.get("/options", response_model=AuthOptions)

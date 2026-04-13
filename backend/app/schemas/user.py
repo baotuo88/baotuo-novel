@@ -84,6 +84,20 @@ class PasswordChangeRequest(BaseModel):
     new_password: str = Field(..., min_length=8, description="新密码")
 
 
+class PasswordForgotRequest(BaseModel):
+    """忘记密码 - 发送验证码请求。"""
+
+    email: EmailStr = Field(..., description="注册邮箱")
+
+
+class PasswordResetRequest(BaseModel):
+    """忘记密码 - 使用验证码重置密码。"""
+
+    email: EmailStr = Field(..., description="注册邮箱")
+    verification_code: str = Field(..., min_length=4, max_length=10, description="邮箱验证码")
+    new_password: str = Field(..., min_length=8, description="新密码")
+
+
 class AuthOptions(BaseModel):
     """认证相关开关信息，供前端动态控制功能。"""
 

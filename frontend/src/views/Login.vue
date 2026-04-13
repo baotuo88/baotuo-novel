@@ -62,6 +62,16 @@
             />
           </div>
 
+          <div class="flex justify-end">
+            <button
+              type="button"
+              class="md-btn md-btn-text md-ripple px-2"
+              @click="openForgotPasswordModal"
+            >
+              忘记密码？
+            </button>
+          </div>
+
           <div v-if="error" class="flex items-center gap-2 p-3 rounded-lg" style="background-color: var(--md-error-container);">
             <svg class="w-5 h-5 flex-shrink-0" style="color: var(--md-error);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -103,11 +113,96 @@
         </p>
       </section>
     </div>
+
+    <div v-if="showForgotPasswordModal" class="md-dialog-overlay" @click.self="closeForgotPasswordModal">
+      <div class="md-dialog w-full max-w-lg">
+        <div class="md-dialog-header">
+          <h3 class="md-dialog-title">找回密码</h3>
+          <p class="md-body-medium mt-2" style="color: var(--md-on-surface-variant);">输入注册邮箱并完成验证码验证后即可重置密码。</p>
+        </div>
+
+        <div class="md-dialog-content pb-4 space-y-4">
+          <div class="md-text-field">
+            <label for="resetEmail" class="md-text-field-label">邮箱</label>
+            <input
+              v-model="resetEmail"
+              id="resetEmail"
+              name="resetEmail"
+              type="email"
+              class="md-text-field-input"
+              placeholder="请输入注册邮箱"
+            />
+          </div>
+
+          <div>
+            <label for="resetVerificationCode" class="md-text-field-label">验证码</label>
+            <div class="flex gap-2 items-center mt-1">
+              <input
+                v-model="resetVerificationCode"
+                id="resetVerificationCode"
+                name="resetVerificationCode"
+                type="text"
+                class="md-text-field-input flex-1"
+                placeholder="请输入验证码"
+              />
+              <button
+                type="button"
+                class="md-btn md-btn-tonal md-ripple whitespace-nowrap"
+                :disabled="sendingResetCode || resetCountdown > 0"
+                @click="sendResetCode"
+              >
+                <span v-if="sendingResetCode">发送中...</span>
+                <span v-else>{{ resetCountdown > 0 ? `${resetCountdown}秒后重试` : '发送验证码' }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="md-text-field">
+            <label for="resetNewPassword" class="md-text-field-label">新密码</label>
+            <input
+              v-model="resetNewPassword"
+              id="resetNewPassword"
+              name="resetNewPassword"
+              type="password"
+              class="md-text-field-input"
+              placeholder="至少 8 位"
+            />
+          </div>
+
+          <div v-if="resetError" class="flex items-center gap-2 p-3 rounded-lg" style="background-color: var(--md-error-container);">
+            <svg class="w-5 h-5 flex-shrink-0" style="color: var(--md-error);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span class="md-body-medium" style="color: var(--md-on-error-container);">{{ resetError }}</span>
+          </div>
+
+          <div v-if="resetSuccess" class="flex items-center gap-2 p-3 rounded-lg" style="background-color: var(--md-success-container);">
+            <svg class="w-5 h-5 flex-shrink-0" style="color: var(--md-success);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            <span class="md-body-medium" style="color: var(--md-on-success-container);">{{ resetSuccess }}</span>
+          </div>
+        </div>
+
+        <div class="md-dialog-actions">
+          <button type="button" class="md-btn md-btn-text md-ripple" @click="closeForgotPasswordModal">取消</button>
+          <button
+            type="button"
+            class="md-btn md-btn-filled md-ripple"
+            :disabled="resettingPassword"
+            @click="submitResetPassword"
+          >
+            <span v-if="resettingPassword">重置中...</span>
+            <span v-else>确认重置</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import TypewriterEffect from '@/components/TypewriterEffect.vue';
@@ -116,16 +211,30 @@ const username = ref('');
 const password = ref('');
 const error = ref('');
 const isLoading = ref(false);
+const showForgotPasswordModal = ref(false);
+const resetEmail = ref('');
+const resetVerificationCode = ref('');
+const resetNewPassword = ref('');
+const sendingResetCode = ref(false);
+const resetCountdown = ref(0);
+const resettingPassword = ref(false);
+const resetError = ref('');
+const resetSuccess = ref('');
 const router = useRouter();
 const authStore = useAuthStore();
 const allowRegistration = computed(() => authStore.allowRegistration);
 const enableLinuxdoLogin = computed(() => authStore.enableLinuxdoLogin);
+let resetCountdownTimer: ReturnType<typeof setInterval> | null = null;
 
 // 首屏自动拉取认证配置，确保登录页动态展示开关
 onMounted(() => {
   authStore.fetchAuthOptions().catch((error) => {
     console.error('初始化认证配置失败', error);
   });
+});
+
+onBeforeUnmount(() => {
+  clearResetCountdown();
 });
 
 const handleLogin = async () => {
@@ -144,6 +253,95 @@ const handleLogin = async () => {
     console.error(err);
   } finally {
     isLoading.value = false;
+  }
+};
+
+const clearResetCountdown = () => {
+  if (resetCountdownTimer) {
+    clearInterval(resetCountdownTimer);
+    resetCountdownTimer = null;
+  }
+};
+
+const openForgotPasswordModal = () => {
+  showForgotPasswordModal.value = true;
+  resetError.value = '';
+  resetSuccess.value = '';
+};
+
+const closeForgotPasswordModal = () => {
+  showForgotPasswordModal.value = false;
+  sendingResetCode.value = false;
+  resettingPassword.value = false;
+  resetError.value = '';
+  resetSuccess.value = '';
+  clearResetCountdown();
+  resetCountdown.value = 0;
+};
+
+const sendResetCode = async () => {
+  resetError.value = '';
+  resetSuccess.value = '';
+
+  if (!resetEmail.value) {
+    resetError.value = '请输入注册邮箱';
+    return;
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(resetEmail.value)) {
+    resetError.value = '邮箱格式不正确';
+    return;
+  }
+
+  sendingResetCode.value = true;
+  try {
+    await authStore.forgotPassword(resetEmail.value);
+    resetSuccess.value = '验证码已发送，请查收邮箱';
+    resetCountdown.value = 60;
+    clearResetCountdown();
+    resetCountdownTimer = setInterval(() => {
+      resetCountdown.value -= 1;
+      if (resetCountdown.value <= 0) {
+        clearResetCountdown();
+      }
+    }, 1000);
+  } catch (err: any) {
+    resetError.value = err.message || '发送验证码失败';
+  } finally {
+    sendingResetCode.value = false;
+  }
+};
+
+const submitResetPassword = async () => {
+  resetError.value = '';
+  resetSuccess.value = '';
+
+  if (!resetEmail.value || !resetVerificationCode.value || !resetNewPassword.value) {
+    resetError.value = '请完整填写邮箱、验证码和新密码';
+    return;
+  }
+
+  if (resetNewPassword.value.length < 8) {
+    resetError.value = '新密码至少 8 位';
+    return;
+  }
+
+  resettingPassword.value = true;
+  try {
+    await authStore.resetPassword({
+      email: resetEmail.value,
+      verification_code: resetVerificationCode.value,
+      new_password: resetNewPassword.value,
+    });
+    resetSuccess.value = '密码重置成功，请使用新密码登录';
+    setTimeout(() => {
+      closeForgotPasswordModal();
+    }, 1200);
+  } catch (err: any) {
+    resetError.value = err.message || '重置密码失败';
+  } finally {
+    resettingPassword.value = false;
   }
 };
 </script>

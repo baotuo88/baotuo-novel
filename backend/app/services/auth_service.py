@@ -20,11 +20,20 @@ from ..core.security import create_access_token, hash_password, verify_password
 from ..models import User
 from ..repositories.system_config_repository import SystemConfigRepository
 from ..repositories.user_repository import UserRepository
-from ..schemas.user import AuthOptions, Token, UserCreate, UserInDB, UserRegistration
+from ..schemas.user import (
+    AuthOptions,
+    PasswordResetRequest,
+    Token,
+    UserCreate,
+    UserInDB,
+    UserRegistration,
+)
 
 
 _VERIFICATION_CACHE: Dict[str, tuple[str, float]] = {}
 _LAST_SEND_TIME: Dict[str, float] = {}
+_PASSWORD_RESET_CACHE: Dict[str, tuple[str, float]] = {}
+_PASSWORD_RESET_LAST_SEND_TIME: Dict[str, float] = {}
 
 
 class AuthService:
@@ -36,6 +45,8 @@ class AuthService:
         self.system_config_repo = SystemConfigRepository(session)
         self._verification_cache = _VERIFICATION_CACHE
         self._last_send_time = _LAST_SEND_TIME
+        self._password_reset_cache = _PASSWORD_RESET_CACHE
+        self._password_reset_last_send_time = _PASSWORD_RESET_LAST_SEND_TIME
 
     # ------------------------------------------------------------------
     # 用户登录 / 注册
@@ -90,7 +101,7 @@ class AuthService:
         if email in self._last_send_time and now - self._last_send_time[email] < 60:
             raise HTTPException(status_code=429, detail="请稍后再试，1分钟内不可重复发送")
 
-        code = "".join(random.choices(string.digits, k=6))
+        code = self._generate_verification_code()
         self._verification_cache[email] = (code, now + 300)
         self._last_send_time[email] = now
 
@@ -98,21 +109,63 @@ class AuthService:
         if not smtp_config:
             raise HTTPException(status_code=500, detail="未配置邮件服务，请联系管理员")
 
-        await self._send_email(email, code, smtp_config)
+        await self._send_email(
+            email,
+            code,
+            smtp_config,
+            subject="注册验证码",
+            title="注册验证码",
+            subtitle="请使用下方验证码完成注册。",
+        )
+
+    async def send_password_reset_code(self, email: str) -> None:
+        now = time.time()
+        if email in self._password_reset_last_send_time and now - self._password_reset_last_send_time[email] < 60:
+            raise HTTPException(status_code=429, detail="请稍后再试，1分钟内不可重复发送")
+        self._password_reset_last_send_time[email] = now
+
+        user = await self.user_repo.get_by_email(email)
+        if user is None:
+            logging.getLogger(__name__).info("重置密码请求邮箱未注册，忽略发送", extra={"email": email})
+            return
+
+        code = self._generate_verification_code()
+        self._password_reset_cache[email] = (code, now + 300)
+
+        smtp_config = await self._load_smtp_config()
+        if not smtp_config:
+            raise HTTPException(status_code=500, detail="未配置邮件服务，请联系管理员")
+
+        await self._send_email(
+            email,
+            code,
+            smtp_config,
+            subject="重置密码验证码",
+            title="重置密码验证码",
+            subtitle="请使用下方验证码完成密码重置。",
+        )
 
     def verify_code(self, email: str | None, code: str) -> bool:
+        return self._verify_cached_code(self._verification_cache, email, code)
+
+    @staticmethod
+    def _generate_verification_code() -> str:
+        return "".join(random.choices(string.digits, k=6))
+
+    @staticmethod
+    def _verify_cached_code(cache: Dict[str, tuple[str, float]], email: str | None, code: str) -> bool:
         if not email:
             return False
-        cached = self._verification_cache.get(email)
+        cached = cache.get(email)
         if not cached:
             return False
         expected, expire_at = cached
         if time.time() > expire_at:
-            self._verification_cache.pop(email, None)
+            cache.pop(email, None)
             return False
         if code != expected:
             return False
-        self._verification_cache.pop(email, None)
+        cache.pop(email, None)
         return True
 
     async def _load_smtp_config(self) -> Optional[Dict[str, str]]:
@@ -135,7 +188,16 @@ class AuthService:
 
         return configs
 
-    async def _send_email(self, to_email: str, code: str, smtp_config: Dict[str, str]) -> None:
+    async def _send_email(
+        self,
+        to_email: str,
+        code: str,
+        smtp_config: Dict[str, str],
+        *,
+        subject: str = "验证码",
+        title: str = "操作验证码",
+        subtitle: str = "请使用下方验证码完成操作。",
+    ) -> None:
         logger = logging.getLogger(__name__)
         server = smtp_config["smtp.server"]
         port = int(smtp_config.get("smtp.port", "465"))
@@ -176,7 +238,7 @@ class AuthService:
 <head>
     <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\">
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-    <title>您的验证码</title>
+    <title>{title}</title>
     <style>
         body, table, td, a {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
         table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
@@ -192,8 +254,8 @@ class AuthService:
                 <table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"max-width: 512px; background-color: #ffffff; border-radius: 16px; overflow: hidden;\">
                     <tr>
                         <td align=\"center\" style=\"background-color: #2563eb; padding: 32px;\">
-                            <h1 style=\"font-family: Arial, Helvetica, sans-serif; font-size: 30px; font-weight: bold; color: #ffffff; margin: 0;\">操作验证码</h1>
-                            <p style=\"font-family: Arial, Helvetica, sans-serif; font-size: 16px; color: #dbeafe; margin: 8px 0 0;\">请使用下方验证码完成操作。</p>
+                            <h1 style=\"font-family: Arial, Helvetica, sans-serif; font-size: 30px; font-weight: bold; color: #ffffff; margin: 0;\">{title}</h1>
+                            <p style=\"font-family: Arial, Helvetica, sans-serif; font-size: 16px; color: #dbeafe; margin: 8px 0 0;\">{subtitle}</p>
                         </td>
                     </tr>
                     <tr>
@@ -242,7 +304,7 @@ class AuthService:
 """
 
         message = MIMEText(html_content, "html", "utf-8")
-        message["Subject"] = Header("注册验证码", "utf-8").encode()
+        message["Subject"] = Header(subject, "utf-8").encode()
         message["From"] = formatted_from
         message["To"] = to_email
 
@@ -387,4 +449,21 @@ class AuthService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能为默认密码")
 
         user.hashed_password = hash_password(new_password)
+        await self.session.commit()
+
+    async def reset_password(self, payload: PasswordResetRequest) -> None:
+        user = await self.user_repo.get_by_email(payload.email)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="验证码错误或已过期")
+
+        if not self._verify_cached_code(self._password_reset_cache, payload.email, payload.verification_code):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="验证码错误或已过期")
+
+        if verify_password(payload.new_password, user.hashed_password):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与当前密码相同")
+
+        if user.username == settings.admin_default_username and payload.new_password == settings.admin_default_password:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能为默认密码")
+
+        user.hashed_password = hash_password(payload.new_password)
         await self.session.commit()
