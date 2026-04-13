@@ -17,6 +17,7 @@ from ..models import LLMCallLog
 from ..repositories.llm_config_repository import LLMConfigRepository
 from ..repositories.system_config_repository import SystemConfigRepository
 from ..repositories.user_repository import UserRepository
+from ..repositories.user_subscription_repository import UserSubscriptionRepository
 from ..services.admin_setting_service import AdminSettingService
 from ..services.prompt_service import PromptService
 from ..services.usage_service import UsageService
@@ -69,6 +70,7 @@ class LLMService:
         self.llm_repo = LLMConfigRepository(session)
         self.system_config_repo = SystemConfigRepository(session)
         self.user_repo = UserRepository(session)
+        self.user_subscription_repo = UserSubscriptionRepository(session)
         self.admin_setting_service = AdminSettingService(session)
         self.usage_service = UsageService(session)
         self._embedding_dimensions: Dict[str, int] = {}
@@ -720,15 +722,17 @@ class LLMService:
     async def _resolve_llm_config(self, user_id: Optional[int]) -> Dict[str, Optional[str]]:
         if user_id:
             config = await self.llm_repo.get_by_user(user_id)
-            if config and config.llm_provider_api_key:
+            custom_api_key = (config.llm_provider_api_key or "").strip() if config else ""
+            if config and custom_api_key:
                 return {
-                    "api_key": config.llm_provider_api_key,
+                    "api_key": custom_api_key,
                     "base_url": config.llm_provider_url,
                     "model": config.llm_provider_model,
                 }
 
-        # 检查每日使用次数限制
+        # 未配置自定义 Key 时，按策略检查系统 Key 使用资格
         if user_id:
+            await self._enforce_system_key_subscription(user_id)
             await self._enforce_daily_limit(user_id)
 
         api_key = await self._get_config_value("llm.api_key")
@@ -743,6 +747,36 @@ class LLMService:
             )
 
         return {"api_key": api_key, "base_url": base_url, "model": model}
+
+    async def _is_system_key_subscription_required(self) -> bool:
+        value = await self._get_config_value("subscription.require_for_system_key")
+        if value is None:
+            return True
+        normalized = str(value).strip().lower()
+        return normalized in {"1", "true", "yes", "on"}
+
+    async def _enforce_system_key_subscription(self, user_id: int) -> None:
+        if not await self._is_system_key_subscription_required():
+            return
+
+        user = await self.user_repo.get(id=user_id)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已被禁用")
+        if user.is_admin:
+            return
+
+        subscription = await self.user_subscription_repo.get_by_user_id(user_id)
+        if not subscription:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="当前账号未开通系统 Key 订阅，请配置自定义 API Key 或联系管理员开通。",
+            )
+
+        if not subscription.is_active(datetime.utcnow()):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="当前账号订阅已失效，请续费后继续使用系统 Key，或改用自定义 API Key。",
+            )
 
     async def get_embedding(
         self,

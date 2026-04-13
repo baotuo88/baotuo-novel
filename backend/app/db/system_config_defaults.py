@@ -124,6 +124,11 @@ SYSTEM_CONFIG_DEFAULTS: list[SystemConfigDefault] = [
         description="是否启用 Linux.do OAuth 登录。",
     ),
     SystemConfigDefault(
+        key="subscription.require_for_system_key",
+        value_getter=lambda _config: "true",
+        description="无自定义 API Key 时，是否必须存在有效订阅才允许使用系统默认 Key。",
+    ),
+    SystemConfigDefault(
         key="linuxdo.client_id",
         value_getter=lambda config: config.linuxdo_client_id,
         description="Linux.do OAuth Client ID。",

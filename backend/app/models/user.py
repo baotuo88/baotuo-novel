@@ -30,3 +30,8 @@ class User(Base):
     # 关系映射
     novel_projects: Mapped[list["NovelProject"]] = relationship("NovelProject", back_populates="owner")
     llm_config: Mapped[Optional["LLMConfig"]] = relationship("LLMConfig", back_populates="user", uselist=False)
+    subscription: Mapped[Optional["UserSubscription"]] = relationship(
+        "UserSubscription",
+        back_populates="user",
+        uselist=False,
+    )

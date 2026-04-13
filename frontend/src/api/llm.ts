@@ -94,6 +94,26 @@ export interface LLMConnectionTestResult {
   sample_models: string[];
 }
 
+export interface UserSubscriptionStatus {
+  user_id: number;
+  plan_name: string;
+  status: string;
+  starts_at?: string | null;
+  expires_at?: string | null;
+  is_active: boolean;
+}
+
+export const getMySubscriptionStatus = async (): Promise<UserSubscriptionStatus> => {
+  const response = await fetch('/api/auth/subscription', {
+    method: 'GET',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error('获取订阅状态失败');
+  }
+  return response.json();
+};
+
 export const testLLMConnection = async (
   request: LLMConnectionTestRequest
 ): Promise<LLMConnectionTestResult> => {

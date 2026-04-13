@@ -211,6 +211,22 @@ export interface AdminUser {
   is_active: boolean
 }
 
+export interface UserSubscriptionRead {
+  user_id: number
+  plan_name: string
+  status: string
+  starts_at?: string | null
+  expires_at?: string | null
+  is_active: boolean
+}
+
+export interface UserSubscriptionUpsertPayload {
+  plan_name: string
+  status: 'active' | 'inactive' | 'canceled'
+  starts_at?: string | null
+  expires_at?: string | null
+}
+
 export interface UserCreatePayload {
   username: string
   email?: string
@@ -485,6 +501,17 @@ export class AdminAPI {
   static updateUser(id: number, payload: UserUpdatePayload): Promise<AdminUser> {
     return this.request(`/users/${id}`, {
       method: 'PATCH',
+      body: JSON.stringify(payload)
+    })
+  }
+
+  static getUserSubscription(id: number): Promise<UserSubscriptionRead> {
+    return this.request(`/users/${id}/subscription`)
+  }
+
+  static upsertUserSubscription(id: number, payload: UserSubscriptionUpsertPayload): Promise<UserSubscriptionRead> {
+    return this.request(`/users/${id}/subscription`, {
+      method: 'PUT',
       body: JSON.stringify(payload)
     })
   }

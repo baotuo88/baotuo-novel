@@ -19,6 +19,7 @@ from .prompt import Prompt
 from .update_log import UpdateLog
 from .usage_metric import UsageMetric
 from .user import User
+from .user_subscription import UserSubscription
 from .user_daily_request import UserDailyRequest
 from .system_config import SystemConfig
 
@@ -70,6 +71,7 @@ __all__ = [
     "UpdateLog",
     "UsageMetric",
     "User",
+    "UserSubscription",
     "UserDailyRequest",
     "SystemConfig",
     # 项目记忆模型

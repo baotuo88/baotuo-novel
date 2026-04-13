@@ -15,12 +15,14 @@ from ...schemas.user import (
     AuthOptions,
     PasswordForgotRequest,
     PasswordResetRequest,
+    UserSubscriptionRead,
     Token,
     User,
     UserInDB,
     UserRegistration,
 )
 from ...services.auth_service import AuthService
+from ...services.user_subscription_service import UserSubscriptionService
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,10 @@ router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
 def get_auth_service(session: AsyncSession = Depends(get_session)) -> AuthService:
     return AuthService(session)
+
+
+def get_user_subscription_service(session: AsyncSession = Depends(get_session)) -> UserSubscriptionService:
+    return UserSubscriptionService(session)
 
 
 @router.post("/send-code", status_code=204)
@@ -77,6 +83,14 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), service: AuthS
 async def read_current_user(current_user: UserInDB = Depends(get_current_user)):
     logger.debug("读取当前用户：%s", current_user.username)
     return current_user
+
+
+@router.get("/subscription", response_model=UserSubscriptionRead)
+async def read_current_user_subscription(
+    current_user: UserInDB = Depends(get_current_user),
+    service: UserSubscriptionService = Depends(get_user_subscription_service),
+):
+    return await service.get_user_subscription(current_user.id)
 
 
 @router.get("/linuxdo/login")

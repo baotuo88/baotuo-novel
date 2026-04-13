@@ -63,6 +63,8 @@ from ...schemas.user import (
     PasswordChangeRequest,
     User as UserSchema,
     UserCreateAdmin,
+    UserSubscriptionRead,
+    UserSubscriptionUpsert,
     UserUpdateAdmin,
 )
 from ...services.auth_service import AuthService
@@ -72,6 +74,7 @@ from ...services.novel_service import NovelService
 from ...services.prompt_service import PromptService
 from ...services.update_log_service import UpdateLogService
 from ...services.user_service import UserService
+from ...services.user_subscription_service import UserSubscriptionService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -103,6 +106,10 @@ def get_novel_service(session: AsyncSession = Depends(get_session)) -> NovelServ
 
 def get_user_service(session: AsyncSession = Depends(get_session)) -> UserService:
     return UserService(session)
+
+
+def get_user_subscription_service(session: AsyncSession = Depends(get_session)) -> UserSubscriptionService:
+    return UserSubscriptionService(session)
 
 
 def get_auth_service(session: AsyncSession = Depends(get_session)) -> AuthService:
@@ -1109,6 +1116,33 @@ async def update_user(
         raise HTTPException(status_code=404, detail="用户不存在")
     logger.info("管理员 %s 更新用户：%s", current_admin.username, user_id)
     return UserSchema.model_validate(user)
+
+
+@router.get("/users/{user_id}/subscription", response_model=UserSubscriptionRead)
+async def get_user_subscription(
+    user_id: int,
+    service: UserSubscriptionService = Depends(get_user_subscription_service),
+    _: None = Depends(get_current_admin),
+) -> UserSubscriptionRead:
+    return await service.get_user_subscription(user_id)
+
+
+@router.put("/users/{user_id}/subscription", response_model=UserSubscriptionRead)
+async def upsert_user_subscription(
+    user_id: int,
+    payload: UserSubscriptionUpsert,
+    service: UserSubscriptionService = Depends(get_user_subscription_service),
+    current_admin=Depends(get_current_admin),
+) -> UserSubscriptionRead:
+    item = await service.upsert_user_subscription(user_id, payload)
+    logger.info(
+        "管理员 %s 更新用户订阅：user_id=%s plan=%s status=%s",
+        current_admin.username,
+        user_id,
+        item.plan_name,
+        item.status,
+    )
+    return item
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

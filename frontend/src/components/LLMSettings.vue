@@ -3,6 +3,16 @@
   <div class="bg-white/70 backdrop-blur-xl rounded-2xl shadow-lg p-8">
     <h2 class="text-2xl font-bold text-gray-800 mb-6">LLM 配置</h2>
     <h5 class="text-1xl font-bold text-gray-800 mb-6">建议使用自己的中转API和KEY</h5>
+    <div
+      class="mb-6 rounded-lg border px-4 py-3 text-sm"
+      :class="subscriptionCardClass"
+    >
+      <div class="font-semibold">{{ subscriptionTitle }}</div>
+      <div class="mt-1 opacity-90">{{ subscriptionDetail }}</div>
+      <div v-if="usingCustomKey" class="mt-2 text-emerald-700">
+        当前已填写自定义 API Key，调用时优先使用你的自定义 Key。
+      </div>
+    </div>
     <form @submit.prevent="handleSave" class="space-y-6">
       <div>
         <label for="url" class="block text-sm font-medium text-gray-700">API URL</label>
@@ -162,9 +172,11 @@ import {
   createOrUpdateLLMConfig,
   deleteLLMConfig,
   getAvailableModels,
+  getMySubscriptionStatus,
   testLLMConnection,
   type LLMConfigCreate,
   type LLMConnectionTestResult,
+  type UserSubscriptionStatus,
 } from '@/api/llm';
 
 const config = ref<LLMConfigCreate>({
@@ -179,6 +191,8 @@ const isLoadingModels = ref(false);
 const showModelDropdown = ref(false);
 const isTestingConnection = ref(false);
 const connectionResult = ref<LLMConnectionTestResult | null>(null);
+const subscriptionStatus = ref<UserSubscriptionStatus | null>(null);
+const subscriptionStatusError = ref('');
 
 // 根据输入过滤模型列表
 const filteredModels = computed(() => {
@@ -191,14 +205,59 @@ const filteredModels = computed(() => {
   );
 });
 
+const usingCustomKey = computed(() => Boolean(config.value.llm_provider_api_key?.trim()));
+
+const formatDateTime = (value?: string | null): string => {
+  if (!value) return '未设置';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '未设置';
+  return date.toLocaleString('zh-CN', { hour12: false });
+};
+
+const subscriptionTitle = computed(() => {
+  if (subscriptionStatusError.value) return '订阅状态读取失败';
+  if (!subscriptionStatus.value) return '订阅状态加载中';
+  if (subscriptionStatus.value.is_active) {
+    return `系统 Key 订阅有效（${subscriptionStatus.value.plan_name}）`;
+  }
+  return `系统 Key 订阅未生效（${subscriptionStatus.value.plan_name}）`;
+});
+
+const subscriptionDetail = computed(() => {
+  if (subscriptionStatusError.value) return subscriptionStatusError.value;
+  if (!subscriptionStatus.value) return '正在读取你的订阅信息...';
+  const start = formatDateTime(subscriptionStatus.value.starts_at);
+  const end = formatDateTime(subscriptionStatus.value.expires_at);
+  return `状态：${subscriptionStatus.value.status}，开始：${start}，到期：${end}`;
+});
+
+const subscriptionCardClass = computed(() => {
+  if (subscriptionStatusError.value) return 'border-rose-200 bg-rose-50 text-rose-700';
+  if (!subscriptionStatus.value) return 'border-slate-200 bg-slate-50 text-slate-700';
+  return subscriptionStatus.value.is_active
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+    : 'border-amber-200 bg-amber-50 text-amber-700';
+});
+
 onMounted(async () => {
-  const existingConfig = await getLLMConfig();
-  if (existingConfig) {
-    config.value = {
-      llm_provider_url: existingConfig.llm_provider_url || '',
-      llm_provider_api_key: existingConfig.llm_provider_api_key || '',
-      llm_provider_model: existingConfig.llm_provider_model || '',
-    };
+  try {
+    const existingConfig = await getLLMConfig();
+    if (existingConfig) {
+      config.value = {
+        llm_provider_url: existingConfig.llm_provider_url || '',
+        llm_provider_api_key: existingConfig.llm_provider_api_key || '',
+        llm_provider_model: existingConfig.llm_provider_model || '',
+      };
+    }
+  } catch (error) {
+    console.error('加载 LLM 配置失败', error);
+  }
+
+  try {
+    subscriptionStatus.value = await getMySubscriptionStatus();
+  } catch (error) {
+    console.error('加载订阅状态失败', error);
+    subscriptionStatusError.value = '暂时无法读取订阅状态，请稍后重试。';
   }
 });
 

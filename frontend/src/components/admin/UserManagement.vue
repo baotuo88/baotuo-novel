@@ -99,6 +99,61 @@
         </n-space>
       </template>
     </n-modal>
+
+    <n-modal v-model:show="showSubscriptionModal" preset="card" :title="subscriptionModalTitle" style="width: 540px">
+      <n-spin :show="subscriptionLoading">
+        <n-form
+          label-placement="left"
+          label-width="90"
+          require-mark-placement="right-hanging"
+        >
+          <n-form-item label="套餐名称">
+            <n-input
+              v-model:value="subscriptionForm.plan_name"
+              placeholder="例如：monthly-pro"
+            />
+          </n-form-item>
+          <n-form-item label="状态">
+            <n-select
+              v-model:value="subscriptionForm.status"
+              :options="subscriptionStatusOptions"
+            />
+          </n-form-item>
+          <n-form-item label="开始时间">
+            <n-date-picker
+              v-model:value="subscriptionForm.starts_at_ms"
+              type="datetime"
+              clearable
+              style="width: 100%;"
+            />
+          </n-form-item>
+          <n-form-item label="到期时间">
+            <n-date-picker
+              v-model:value="subscriptionForm.expires_at_ms"
+              type="datetime"
+              clearable
+              style="width: 100%;"
+            />
+          </n-form-item>
+          <n-form-item label="快捷设置">
+            <n-space>
+              <n-button size="small" @click="applySubscriptionDays(30)">+30天</n-button>
+              <n-button size="small" @click="applySubscriptionDays(90)">+90天</n-button>
+              <n-button size="small" @click="applySubscriptionDays(365)">+365天</n-button>
+              <n-button size="small" tertiary @click="clearSubscriptionDates">清空时间</n-button>
+            </n-space>
+          </n-form-item>
+        </n-form>
+      </n-spin>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showSubscriptionModal = false">取消</n-button>
+          <n-button type="primary" :loading="subscriptionSubmitting" @click="handleSubmitSubscription">
+            保存订阅
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </n-card>
 </template>
 
@@ -109,11 +164,13 @@ import {
   NButton,
   NCard,
   NDataTable,
+  NDatePicker,
   NForm,
   NFormItem,
   NInput,
   NModal,
   NPopconfirm,
+  NSelect,
   NSpin,
   NSwitch,
   NTag,
@@ -125,7 +182,13 @@ import {
   type FormItemRule
 } from 'naive-ui'
 
-import { AdminAPI, type AdminUser, type UserCreatePayload } from '@/api/admin'
+import {
+  AdminAPI,
+  type AdminUser,
+  type UserCreatePayload,
+  type UserSubscriptionRead,
+  type UserSubscriptionUpsertPayload,
+} from '@/api/admin'
 
 const message = useMessage()
 const users = ref<AdminUser[]>([])
@@ -139,6 +202,11 @@ const isEditMode = ref(false)
 const editingId = ref<number | null>(null)
 const formRef = ref<FormInst | null>(null)
 
+const showSubscriptionModal = ref(false)
+const subscriptionLoading = ref(false)
+const subscriptionSubmitting = ref(false)
+const subscriptionTargetUser = ref<AdminUser | null>(null)
+
 const formModel = reactive({
   username: '',
   email: '',
@@ -146,6 +214,19 @@ const formModel = reactive({
   is_admin: false,
   is_active: true
 })
+
+const subscriptionForm = reactive({
+  plan_name: 'basic',
+  status: 'active' as 'active' | 'inactive' | 'canceled',
+  starts_at_ms: null as number | null,
+  expires_at_ms: null as number | null,
+})
+
+const subscriptionStatusOptions = [
+  { label: '生效中', value: 'active' },
+  { label: '未生效/停用', value: 'inactive' },
+  { label: '已取消', value: 'canceled' },
+]
 
 const rules: FormRules = {
   username: [
@@ -239,6 +320,15 @@ const columns: DataTableColumns<AdminUser> = [
             { default: () => '编辑' }
           ),
           h(
+            NButton,
+            {
+              size: 'small',
+              tertiary: true,
+              onClick: () => handleManageSubscription(row),
+            },
+            { default: () => '订阅' }
+          ),
+          h(
             NPopconfirm,
             {
               onPositiveClick: () => handleDelete(row.id)
@@ -276,6 +366,10 @@ const filteredUsers = computed(() => {
 })
 
 const modalTitle = computed(() => isEditMode.value ? '编辑用户' : '新建用户')
+const subscriptionModalTitle = computed(() => {
+  const username = subscriptionTargetUser.value?.username
+  return username ? `订阅设置 · ${username}` : '订阅设置'
+})
 
 const rowKey = (row: AdminUser) => row.id
 
@@ -366,6 +460,86 @@ const handleSubmit = () => {
       submitting.value = false
     }
   })
+}
+
+const toMillis = (value?: string | null): number | null => {
+  if (!value) return null
+  const ts = new Date(value).getTime()
+  return Number.isNaN(ts) ? null : ts
+}
+
+const toIsoOrNull = (value: number | null): string | null => {
+  if (!value) return null
+  return new Date(value).toISOString()
+}
+
+const applySubscriptionRecord = (record: UserSubscriptionRead) => {
+  subscriptionForm.plan_name = record.plan_name || 'basic'
+  subscriptionForm.status = (record.status as 'active' | 'inactive' | 'canceled') || 'inactive'
+  subscriptionForm.starts_at_ms = toMillis(record.starts_at)
+  subscriptionForm.expires_at_ms = toMillis(record.expires_at)
+}
+
+const handleManageSubscription = async (row: AdminUser) => {
+  subscriptionTargetUser.value = row
+  showSubscriptionModal.value = true
+  subscriptionLoading.value = true
+  try {
+    const record = await AdminAPI.getUserSubscription(row.id)
+    applySubscriptionRecord(record)
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : '加载订阅信息失败')
+    subscriptionForm.plan_name = 'basic'
+    subscriptionForm.status = 'inactive'
+    subscriptionForm.starts_at_ms = null
+    subscriptionForm.expires_at_ms = null
+  } finally {
+    subscriptionLoading.value = false
+  }
+}
+
+const clearSubscriptionDates = () => {
+  subscriptionForm.starts_at_ms = null
+  subscriptionForm.expires_at_ms = null
+}
+
+const applySubscriptionDays = (days: number) => {
+  const start = Date.now()
+  subscriptionForm.starts_at_ms = start
+  subscriptionForm.expires_at_ms = start + days * 24 * 60 * 60 * 1000
+}
+
+const handleSubmitSubscription = async () => {
+  if (!subscriptionTargetUser.value) return
+  if (!subscriptionForm.plan_name.trim()) {
+    message.error('套餐名称不能为空')
+    return
+  }
+  if (
+    subscriptionForm.starts_at_ms &&
+    subscriptionForm.expires_at_ms &&
+    subscriptionForm.expires_at_ms <= subscriptionForm.starts_at_ms
+  ) {
+    message.error('到期时间必须晚于开始时间')
+    return
+  }
+
+  subscriptionSubmitting.value = true
+  try {
+    const payload: UserSubscriptionUpsertPayload = {
+      plan_name: subscriptionForm.plan_name.trim(),
+      status: subscriptionForm.status,
+      starts_at: toIsoOrNull(subscriptionForm.starts_at_ms),
+      expires_at: toIsoOrNull(subscriptionForm.expires_at_ms),
+    }
+    await AdminAPI.upsertUserSubscription(subscriptionTargetUser.value.id, payload)
+    message.success('订阅保存成功')
+    showSubscriptionModal.value = false
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : '保存订阅失败')
+  } finally {
+    subscriptionSubmitting.value = false
+  }
 }
 
 onMounted(fetchUsers)

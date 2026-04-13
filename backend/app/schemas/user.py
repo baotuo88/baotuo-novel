@@ -1,6 +1,8 @@
 # AIMETA P=用户模式_用户和认证请求响应|R=用户结构_令牌结构|NR=不含业务逻辑|E=UserSchema_TokenSchema|X=internal|A=Pydantic模式|D=pydantic|S=none|RD=./README.ai
+from datetime import datetime
+from typing import Literal, Optional
+
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
 
 
 class UserBase(BaseModel):
@@ -96,6 +98,26 @@ class PasswordResetRequest(BaseModel):
     email: EmailStr = Field(..., description="注册邮箱")
     verification_code: str = Field(..., min_length=4, max_length=10, description="邮箱验证码")
     new_password: str = Field(..., min_length=8, description="新密码")
+
+
+class UserSubscriptionUpsert(BaseModel):
+    """管理员设置用户订阅请求。"""
+
+    plan_name: str = Field(default="basic", min_length=1, max_length=64, description="套餐名称")
+    status: Literal["active", "inactive", "canceled"] = Field(default="active", description="订阅状态")
+    starts_at: Optional[datetime] = Field(default=None, description="订阅开始时间")
+    expires_at: Optional[datetime] = Field(default=None, description="订阅到期时间")
+
+
+class UserSubscriptionRead(BaseModel):
+    """用户订阅状态响应。"""
+
+    user_id: int = Field(..., description="用户ID")
+    plan_name: str = Field(..., description="套餐名称")
+    status: str = Field(..., description="订阅状态")
+    starts_at: Optional[datetime] = Field(default=None, description="订阅开始时间")
+    expires_at: Optional[datetime] = Field(default=None, description="订阅到期时间")
+    is_active: bool = Field(default=False, description="是否处于有效订阅期")
 
 
 class AuthOptions(BaseModel):
