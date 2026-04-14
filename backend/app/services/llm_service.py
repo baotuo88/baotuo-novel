@@ -3,6 +3,7 @@ import logging
 import os
 import time
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -13,7 +14,7 @@ from openai import APIConnectionError, APITimeoutError, APIStatusError, AsyncOpe
 from sqlalchemy import func, select
 
 from ..core.config import settings
-from ..models import LLMCallLog
+from ..models import LLMCallLog, UserSubscriptionAuditLog
 from ..repositories.llm_config_repository import LLMConfigRepository
 from ..repositories.system_config_repository import SystemConfigRepository
 from ..repositories.user_repository import UserRepository
@@ -813,7 +814,47 @@ class LLMService:
                 detail="当前账号未开通系统 Key 订阅，请配置自定义 API Key 或联系管理员开通。",
             )
 
-        if not subscription.is_active(datetime.utcnow()):
+        now = datetime.utcnow()
+        if not subscription.is_active(now):
+            expires_at = subscription.expires_at
+            compare_now = now
+            if expires_at and expires_at.tzinfo and compare_now.tzinfo is None:
+                compare_now = compare_now.replace(tzinfo=expires_at.tzinfo)
+
+            # 到期自动降级为 free/inactive，并记录审计
+            if (
+                subscription.status == "active"
+                and expires_at is not None
+                and expires_at <= compare_now
+            ):
+                old_snapshot = {
+                    "user_id": subscription.user_id,
+                    "plan_name": subscription.plan_name,
+                    "status": subscription.status,
+                    "starts_at": subscription.starts_at.isoformat() if subscription.starts_at else None,
+                    "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
+                }
+                subscription.status = "inactive"
+                subscription.plan_name = "free"
+                new_snapshot = {
+                    "user_id": subscription.user_id,
+                    "plan_name": subscription.plan_name,
+                    "status": subscription.status,
+                    "starts_at": subscription.starts_at.isoformat() if subscription.starts_at else None,
+                    "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
+                }
+                self.session.add(
+                    UserSubscriptionAuditLog(
+                        user_id=subscription.user_id,
+                        admin_user_id=None,
+                        admin_username="system",
+                        action="auto_degrade_expired",
+                        old_snapshot=json.dumps(old_snapshot, ensure_ascii=False),
+                        new_snapshot=json.dumps(new_snapshot, ensure_ascii=False),
+                    )
+                )
+                await self.session.commit()
+
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="当前账号订阅已失效，请续费后继续使用系统 Key，或改用自定义 API Key。",

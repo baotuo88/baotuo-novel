@@ -54,6 +54,21 @@ _BUILTIN_WRITING_PRESETS: list[dict] = [
         ],
         "writing_notes_prefix": "本章按细腻言情模式执行：情绪递进优先，关系变化可感知。",
     },
+    {
+        "preset_id": "suspense-thriller",
+        "name": "悬疑惊悚",
+        "description": "线索递进、信息克制、持续制造不确定性与压迫感。",
+        "prompt_name": "writing_v2",
+        "temperature": 0.82,
+        "top_p": 0.9,
+        "max_tokens": 4600,
+        "style_rules": [
+            "每章至少推进一条关键线索，同时保留新的疑点。",
+            "信息披露采用递进策略，避免一次性解释清楚。",
+            "重点场景强化感官细节与心理压迫，结尾保留悬念。",
+        ],
+        "writing_notes_prefix": "本章按悬疑惊悚模式执行：线索递进、信息克制、结尾留钩。",
+    },
 ]
 
 

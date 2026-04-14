@@ -143,6 +143,30 @@
               <n-button size="small" tertiary @click="clearSubscriptionDates">清空时间</n-button>
             </n-space>
           </n-form-item>
+          <n-form-item label="额度补偿">
+            <n-space align="center" style="width: 100%">
+              <n-input-number
+                v-model:value="compensationForm.request_quota"
+                :min="1"
+                :max="100000"
+                placeholder="补偿请求次数"
+                style="width: 180px"
+              />
+              <n-input
+                v-model:value="compensationForm.note"
+                placeholder="补偿说明（必填）"
+                clearable
+              />
+              <n-button
+                size="small"
+                type="warning"
+                :loading="compensationSubmitting"
+                @click="handleCompensateSubscription"
+              >
+                执行补偿
+              </n-button>
+            </n-space>
+          </n-form-item>
         </n-form>
         <div class="subscription-audit-list">
           <div class="subscription-audit-title">最近变更记录</div>
@@ -181,6 +205,7 @@ import {
   NDatePicker,
   NForm,
   NFormItem,
+  NInputNumber,
   NInput,
   NModal,
   NPopconfirm,
@@ -220,6 +245,7 @@ const formRef = ref<FormInst | null>(null)
 const showSubscriptionModal = ref(false)
 const subscriptionLoading = ref(false)
 const subscriptionSubmitting = ref(false)
+const compensationSubmitting = ref(false)
 const subscriptionTargetUser = ref<AdminUser | null>(null)
 const subscriptionAudits = ref<UserSubscriptionAuditItem[]>([])
 
@@ -236,6 +262,11 @@ const subscriptionForm = reactive({
   status: 'active' as 'active' | 'inactive' | 'canceled',
   starts_at_ms: null as number | null,
   expires_at_ms: null as number | null,
+})
+
+const compensationForm = reactive({
+  request_quota: 20 as number | null,
+  note: '',
 })
 
 const subscriptionStatusOptions = [
@@ -504,6 +535,8 @@ const handleManageSubscription = async (row: AdminUser) => {
   showSubscriptionModal.value = true
   subscriptionLoading.value = true
   subscriptionAudits.value = []
+  compensationForm.request_quota = 20
+  compensationForm.note = ''
   try {
     const [record, audits] = await Promise.all([
       AdminAPI.getUserSubscription(row.id),
@@ -531,6 +564,36 @@ const applySubscriptionDays = (days: number) => {
   const start = Date.now()
   subscriptionForm.starts_at_ms = start
   subscriptionForm.expires_at_ms = start + days * 24 * 60 * 60 * 1000
+}
+
+const handleCompensateSubscription = async () => {
+  if (!subscriptionTargetUser.value) return
+  const quota = Number(compensationForm.request_quota || 0)
+  const note = compensationForm.note.trim()
+  if (!quota || quota < 1) {
+    message.error('请输入有效的补偿请求次数')
+    return
+  }
+  if (!note) {
+    message.error('请输入补偿说明')
+    return
+  }
+
+  compensationSubmitting.value = true
+  try {
+    await AdminAPI.compensateUserSubscription(subscriptionTargetUser.value.id, {
+      request_quota: quota,
+      note,
+    })
+    message.success('补偿已执行')
+    compensationForm.note = ''
+    const audits = await AdminAPI.listSubscriptionAudits({ user_id: subscriptionTargetUser.value.id, limit: 8 })
+    subscriptionAudits.value = audits
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : '补偿失败')
+  } finally {
+    compensationSubmitting.value = false
+  }
 }
 
 const handleSubmitSubscription = async () => {

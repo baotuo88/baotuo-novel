@@ -281,6 +281,58 @@ export interface GraphEdge {
   weight: number
 }
 
+export interface FactionItem {
+  id: number
+  name: string
+  faction_type?: string | null
+  description?: string | null
+  power_level?: string | null
+  territory?: string | null
+  leader?: string | null
+  current_status?: string | null
+}
+
+export interface FactionRelationshipItem {
+  id?: number
+  project_id?: string
+  faction_from_id: number
+  faction_to_id: number
+  relationship_type: string
+  strength?: number | null
+  description?: string | null
+  reason?: string | null
+}
+
+export interface WritingPresetItem {
+  preset_id: string
+  name: string
+  description?: string | null
+  prompt_name: string
+  temperature: number
+  top_p?: number | null
+  max_tokens?: number | null
+  style_rules: string[]
+  writing_notes_prefix?: string | null
+  is_builtin: boolean
+  is_active: boolean
+}
+
+export interface ConsistencyViolationItem {
+  severity: string
+  category: string
+  description: string
+  location?: string | null
+  suggested_fix?: string | null
+  confidence?: number
+}
+
+export interface ChapterConsistencyReview {
+  is_consistent: boolean
+  summary: string
+  check_time_ms: number
+  violations: ConsistencyViolationItem[]
+}
+
 export interface WorldGraphResponse {
   project_id: string
   generated_at: string
@@ -342,6 +394,39 @@ export class NovelAPI {
 
   static async getWorldGraph(projectId: string): Promise<WorldGraphResponse> {
     return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/world-graph`)
+  }
+
+  static async getFactions(projectId: string): Promise<{ project_id: string; factions: FactionItem[] }> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/factions`)
+  }
+
+  static async saveFactions(projectId: string, factions: Partial<FactionItem>[]): Promise<{ project_id: string; factions: FactionItem[] }> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/factions`, {
+      method: 'PUT',
+      body: JSON.stringify(factions)
+    })
+  }
+
+  static async getFactionRelationships(projectId: string): Promise<{ project_id: string; relationships: FactionRelationshipItem[] }> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/faction-relationships`)
+  }
+
+  static async saveFactionRelationships(projectId: string, relationships: FactionRelationshipItem[]): Promise<{ project_id: string; relationships: FactionRelationshipItem[] }> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/faction-relationships`, {
+      method: 'PUT',
+      body: JSON.stringify(relationships)
+    })
+  }
+
+  static async listWriterPresets(): Promise<WritingPresetItem[]> {
+    return request(`${API_BASE_URL}${WRITER_PREFIX}/presets`)
+  }
+
+  static async setActiveWriterPreset(presetId: string | null): Promise<WritingPresetItem | null> {
+    return request(`${API_BASE_URL}${WRITER_PREFIX}/presets/active`, {
+      method: 'PUT',
+      body: JSON.stringify({ preset_id: presetId })
+    })
   }
 
   static async converseConcept(
@@ -469,6 +554,15 @@ export class NovelAPI {
     return request(`${WRITER_BASE}/${projectId}/chapters/${chapterNumber}/versions/rollback`, {
       method: 'POST',
       body: JSON.stringify(payload)
+    })
+  }
+
+  static async checkChapterConsistency(
+    projectId: string,
+    chapterNumber: number
+  ): Promise<{ project_id: string; chapter_number: number; review: ChapterConsistencyReview }> {
+    return request(`${WRITER_BASE}/${projectId}/chapters/${chapterNumber}/consistency-check`, {
+      method: 'POST'
     })
   }
 

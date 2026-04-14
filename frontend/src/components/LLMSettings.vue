@@ -13,6 +13,73 @@
         当前已填写自定义 API Key，调用时优先使用你的自定义 Key。
       </div>
     </div>
+
+    <div class="mb-6 rounded-lg border px-4 py-3 text-sm bg-slate-50 border-slate-200 text-slate-700">
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div class="font-semibold">订阅额度与账单</div>
+        <button
+          type="button"
+          class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-100"
+          :disabled="billingLoading"
+          @click="loadSubscriptionMetrics"
+        >
+          {{ billingLoading ? '刷新中...' : '刷新' }}
+        </button>
+      </div>
+
+      <div v-if="subscriptionUsage" class="mt-3 space-y-2">
+        <div>
+          请求额度：{{ subscriptionUsage.daily_request_used }} / {{ subscriptionUsage.daily_request_limit }}
+          <span class="ml-2">({{ Math.round(subscriptionUsage.daily_request_ratio * 100) }}%)</span>
+        </div>
+        <div>
+          预算额度：$ {{ subscriptionUsage.today_estimated_cost_usd.toFixed(4) }}
+          / $ {{ subscriptionUsage.daily_budget_limit_usd.toFixed(4) }}
+          <span class="ml-2">({{ Math.round(subscriptionUsage.daily_budget_ratio * 100) }}%)</span>
+        </div>
+        <div>
+          预警等级：
+          <span :class="usageWarningClass">{{ subscriptionUsage.warning_level }}</span>
+        </div>
+      </div>
+      <div v-else-if="subscriptionUsageError" class="mt-3 text-rose-600">
+        {{ subscriptionUsageError }}
+      </div>
+
+      <div v-if="subscriptionBilling?.items?.length" class="mt-4">
+        <div class="font-medium mb-2">
+          最近 {{ subscriptionBilling.hours }} 小时账单（{{ subscriptionBilling.total_calls }} 次调用）
+        </div>
+        <div class="max-h-52 overflow-auto border border-slate-200 rounded-md bg-white">
+          <table class="w-full text-xs">
+            <thead class="sticky top-0 bg-slate-100 text-slate-600">
+              <tr>
+                <th class="px-2 py-1 text-left">时间</th>
+                <th class="px-2 py-1 text-left">类型</th>
+                <th class="px-2 py-1 text-left">模型</th>
+                <th class="px-2 py-1 text-left">状态</th>
+                <th class="px-2 py-1 text-right">费用(USD)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in subscriptionBilling.items" :key="item.id" class="border-t border-slate-100">
+                <td class="px-2 py-1">{{ formatDateTime(item.created_at) }}</td>
+                <td class="px-2 py-1">{{ item.request_type }}</td>
+                <td class="px-2 py-1">{{ item.model || '-' }}</td>
+                <td class="px-2 py-1">{{ item.status }}</td>
+                <td class="px-2 py-1 text-right">{{ item.estimated_cost_usd.toFixed(6) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="mt-2 text-xs text-slate-500">
+          合计费用：$ {{ subscriptionBilling.total_estimated_cost_usd.toFixed(6) }}
+        </div>
+      </div>
+      <div v-else-if="subscriptionBillingError" class="mt-3 text-rose-600">
+        {{ subscriptionBillingError }}
+      </div>
+    </div>
     <form @submit.prevent="handleSave" class="space-y-6">
       <div>
         <label for="url" class="block text-sm font-medium text-gray-700">API URL</label>
@@ -172,11 +239,15 @@ import {
   createOrUpdateLLMConfig,
   deleteLLMConfig,
   getAvailableModels,
+  getMySubscriptionBilling,
   getMySubscriptionStatus,
+  getMySubscriptionUsageSummary,
   testLLMConnection,
   type LLMConfigCreate,
   type LLMConnectionTestResult,
+  type UserSubscriptionBillingSummary,
   type UserSubscriptionStatus,
+  type UserSubscriptionUsageSummary,
 } from '@/api/llm';
 
 const config = ref<LLMConfigCreate>({
@@ -193,6 +264,11 @@ const isTestingConnection = ref(false);
 const connectionResult = ref<LLMConnectionTestResult | null>(null);
 const subscriptionStatus = ref<UserSubscriptionStatus | null>(null);
 const subscriptionStatusError = ref('');
+const subscriptionUsage = ref<UserSubscriptionUsageSummary | null>(null);
+const subscriptionUsageError = ref('');
+const subscriptionBilling = ref<UserSubscriptionBillingSummary | null>(null);
+const subscriptionBillingError = ref('');
+const billingLoading = ref(false);
 
 // 根据输入过滤模型列表
 const filteredModels = computed(() => {
@@ -239,6 +315,37 @@ const subscriptionCardClass = computed(() => {
     : 'border-amber-200 bg-amber-50 text-amber-700';
 });
 
+const usageWarningClass = computed(() => {
+  const level = String(subscriptionUsage.value?.warning_level || 'ok').toLowerCase();
+  if (level === 'exceeded' || level === 'critical') return 'text-rose-700 font-semibold';
+  if (level === 'warning') return 'text-amber-700 font-semibold';
+  return 'text-emerald-700 font-semibold';
+});
+
+const loadSubscriptionMetrics = async () => {
+  billingLoading.value = true;
+  subscriptionUsageError.value = '';
+  subscriptionBillingError.value = '';
+  try {
+    const [usage, billing] = await Promise.all([
+      getMySubscriptionUsageSummary(),
+      getMySubscriptionBilling({ hours: 72, limit: 80 })
+    ]);
+    subscriptionUsage.value = usage;
+    subscriptionBilling.value = billing;
+  } catch (error) {
+    console.error('加载订阅额度/账单失败', error);
+    if (!subscriptionUsage.value) {
+      subscriptionUsageError.value = '暂时无法读取额度摘要。';
+    }
+    if (!subscriptionBilling.value) {
+      subscriptionBillingError.value = '暂时无法读取账单明细。';
+    }
+  } finally {
+    billingLoading.value = false;
+  }
+};
+
 onMounted(async () => {
   try {
     const existingConfig = await getLLMConfig();
@@ -259,6 +366,7 @@ onMounted(async () => {
     console.error('加载订阅状态失败', error);
     subscriptionStatusError.value = '暂时无法读取订阅状态，请稍后重试。';
   }
+  await loadSubscriptionMetrics();
 });
 
 const handleSave = async () => {

@@ -52,6 +52,19 @@
             分层优化
           </button>
           <button
+            class="md-btn md-btn-tonal md-ripple flex items-center gap-1"
+            :disabled="!projectId || isCheckingConsistency"
+            @click="runConsistencyCheck"
+          >
+            <svg v-if="isCheckingConsistency" class="w-4 h-4 animate-spin" fill="currentColor" viewBox="0 0 20 20">
+              <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"></path>
+            </svg>
+            <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 3.104v5.4m0 0a6 6 0 108.4 8.4m-8.4-8.4a6 6 0 00-8.4 8.4m8.4-8.4L15 3m-5.25 5.504L4.5 3" />
+            </svg>
+            {{ isCheckingConsistency ? '检查中...' : '一致性检查' }}
+          </button>
+          <button
             class="md-btn md-btn-outlined md-ripple flex items-center gap-1"
             :class="selectedChapter.content ? '' : 'opacity-50 cursor-not-allowed'"
             :disabled="!selectedChapter.content"
@@ -204,6 +217,60 @@
       </div>
     </Teleport>
 
+    <Teleport to="body">
+      <div
+        v-if="showConsistencyResult"
+        class="md-dialog-overlay"
+        @click.self="showConsistencyResult = false"
+      >
+        <div class="md-dialog m3-result-dialog flex flex-col">
+          <div class="p-6 border-b" style="border-bottom-color: var(--md-outline-variant);">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="md-headline-small font-semibold">一致性检查结果</h3>
+                <p class="md-body-small md-on-surface-variant mt-1">{{ consistencyReview?.summary || '暂无结果' }}</p>
+              </div>
+              <button
+                @click="showConsistencyResult = false"
+                class="md-icon-btn md-ripple"
+              >
+                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="flex-1 overflow-y-auto p-6">
+            <div
+              v-if="consistencyReview?.violations?.length"
+              class="space-y-3"
+            >
+              <div
+                v-for="(item, index) in consistencyReview.violations"
+                :key="`consistency-${index}`"
+                class="consistency-item"
+              >
+                <div class="consistency-item-title">
+                  [{{ item.severity }}] {{ item.category }} - {{ item.description }}
+                </div>
+                <div v-if="item.location" class="consistency-item-line">位置：{{ item.location }}</div>
+                <div v-if="item.suggested_fix" class="consistency-item-line">建议：{{ item.suggested_fix }}</div>
+              </div>
+            </div>
+            <div v-else class="consistency-ok">未发现明显冲突，设定一致性良好。</div>
+          </div>
+          <div class="p-6 border-t flex justify-end" style="border-top-color: var(--md-outline-variant);">
+            <button
+              @click="showConsistencyResult = false"
+              class="md-btn md-btn-filled md-ripple"
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <WDVersionHistoryModal
       :show="showVersionHistory"
       :project-id="projectId"
@@ -217,8 +284,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { globalAlert } from '@/composables/useAlert'
-import type { Chapter } from '@/api/novel'
-import { OptimizerAPI } from '@/api/novel'
+import type { Chapter, ChapterConsistencyReview } from '@/api/novel'
+import { NovelAPI, OptimizerAPI } from '@/api/novel'
 import WDVersionHistoryModal from '@/components/writing-desk/WDVersionHistoryModal.vue'
 
 interface Props {
@@ -240,6 +307,9 @@ const isApplying = ref(false)
 const optimizedContent = ref('')
 const optimizeResultNotes = ref('')
 const showVersionHistory = ref(false)
+const showConsistencyResult = ref(false)
+const isCheckingConsistency = ref(false)
+const consistencyReview = ref<ChapterConsistencyReview | null>(null)
 
 // 优化维度配置
 const optimizeDimensions = [
@@ -327,6 +397,25 @@ const exportChapterAsTxt = (chapter?: Chapter | null) => {
   link.click()
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
+}
+
+const runConsistencyCheck = async () => {
+  if (!props.projectId) return
+  isCheckingConsistency.value = true
+  try {
+    const response = await NovelAPI.checkChapterConsistency(props.projectId, props.selectedChapter.chapter_number)
+    consistencyReview.value = response.review
+    showConsistencyResult.value = true
+    if (response.review.is_consistent) {
+      globalAlert.showSuccess('一致性检查通过', '检查完成')
+    } else {
+      globalAlert.showError(`检测到 ${response.review.violations.length} 个潜在冲突`, '一致性预警')
+    }
+  } catch (error) {
+    globalAlert.showError(`一致性检查失败: ${error instanceof Error ? error.message : '未知错误'}`)
+  } finally {
+    isCheckingConsistency.value = false
+  }
 }
 
 const handleVersionRolledBack = (chapterNumber: number) => {
@@ -417,5 +506,34 @@ const applyOptimization = async () => {
   border-color: var(--md-primary);
   background-color: var(--md-primary-container);
   box-shadow: var(--md-elevation-1);
+}
+
+.consistency-item {
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--md-surface-container-low);
+}
+
+.consistency-item-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--md-on-surface);
+}
+
+.consistency-item-line {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+  line-height: 1.5;
+}
+
+.consistency-ok {
+  border: 1px solid #86efac;
+  border-radius: 10px;
+  background: #f0fdf4;
+  color: #14532d;
+  padding: 12px;
+  font-size: 13px;
 }
 </style>

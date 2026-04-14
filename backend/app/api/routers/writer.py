@@ -17,7 +17,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
@@ -54,7 +54,9 @@ from ...schemas.novel import (
     WriterTaskCenterRetryRequest,
     WriterTaskCenterRetryResponse,
 )
+from ...schemas.prompt import WritingPresetActivateRequest, WritingPresetRead
 from ...schemas.user import UserInDB
+from ...services.consistency_service import ConsistencyService
 from ...services.chapter_context_service import ChapterContextService
 from ...services.chapter_ingest_service import ChapterIngestionService
 from ...services.llm_service import LLMService
@@ -90,6 +92,25 @@ _WRITER_TASK_ERROR_MESSAGES: Dict[str, str] = {}
 
 def _build_writer_task_id(project_id: str, chapter_number: int) -> str:
     return f"{project_id}:{chapter_number}"
+
+
+def _format_consistency_report(result: Any) -> Dict[str, Any]:
+    return {
+        "is_consistent": bool(result.is_consistent),
+        "summary": str(result.summary or ""),
+        "check_time_ms": int(result.check_time_ms or 0),
+        "violations": [
+            {
+                "severity": v.severity.value if hasattr(v.severity, "value") else str(v.severity),
+                "category": v.category,
+                "description": v.description,
+                "location": v.location,
+                "suggested_fix": v.suggested_fix,
+                "confidence": v.confidence,
+            }
+            for v in (result.violations or [])
+        ],
+    }
 
 
 def _writer_queue_state(status_value: str) -> Literal["active", "failed", "done", "other"]:
@@ -218,6 +239,28 @@ async def _resolve_version_count(session: AsyncSession) -> int:
                 pass
     # 3) 默认值
     return int(settings.writer_chapter_versions)
+
+
+@router.get("/presets", response_model=List[WritingPresetRead])
+async def list_writing_presets(
+    session: AsyncSession = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> List[WritingPresetRead]:
+    prompt_service = PromptService(session)
+    return await prompt_service.list_writing_presets()
+
+
+@router.put("/presets/active", response_model=Optional[WritingPresetRead])
+async def set_active_writing_preset(
+    payload: WritingPresetActivateRequest,
+    session: AsyncSession = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> Optional[WritingPresetRead]:
+    prompt_service = PromptService(session)
+    try:
+        return await prompt_service.activate_writing_preset(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 async def _generate_chapter_mission(
@@ -1363,6 +1406,71 @@ async def generate_chapter(
     return await _load_project_schema(novel_service, project_id, current_user.id)
 
 
+@router.post("/novels/{project_id}/chapters/{chapter_number}/consistency-check")
+async def check_chapter_consistency(
+    project_id: str,
+    chapter_number: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> Dict[str, Any]:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    stmt = (
+        select(Chapter)
+        .options(
+            selectinload(Chapter.versions),
+            selectinload(Chapter.selected_version),
+        )
+        .where(
+            Chapter.project_id == project_id,
+            Chapter.chapter_number == chapter_number,
+        )
+    )
+    chapter = (await session.execute(stmt)).scalars().first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    selected_version = chapter.selected_version
+    if not selected_version and chapter.versions:
+        selected_version = sorted(
+            chapter.versions,
+            key=lambda item: item.created_at.timestamp() if item.created_at else 0.0,
+        )[-1]
+
+    chapter_text = ""
+    if selected_version and selected_version.content:
+        chapter_text = selected_version.content
+    elif chapter.content:
+        chapter_text = chapter.content
+
+    if not chapter_text.strip():
+        raise HTTPException(status_code=400, detail="章节内容为空，无法执行一致性检查")
+
+    sync_session = getattr(session, "sync_session", session)
+    consistency_service = ConsistencyService(sync_session, LLMService(session))
+    result = await consistency_service.check_consistency(
+        project_id=project_id,
+        chapter_text=chapter_text,
+        user_id=current_user.id,
+        include_foreshadowing=True,
+    )
+    report = _format_consistency_report(result)
+
+    if selected_version:
+        meta = selected_version.metadata if isinstance(selected_version.metadata, dict) else {}
+        meta["consistency_report"] = report
+        meta["consistency_checked_at"] = datetime.utcnow().isoformat()
+        selected_version.metadata = meta
+        await session.commit()
+
+    return {
+        "project_id": project_id,
+        "chapter_number": chapter_number,
+        "review": report,
+    }
+
+
 @router.post("/novels/{project_id}/chapters/select", response_model=NovelProjectSchema)
 async def select_chapter_version(
     project_id: str,
@@ -1399,6 +1507,29 @@ async def select_chapter_version(
     except Exception as e:
         logger.error(f"章节 {request.chapter_number} 向量化入库失败: {e}")
         # 向量化失败不应阻止版本选择，仅记录错误
+
+    # 选中版本后执行一次自动一致性检查，并写入版本元数据（失败不阻断主流程）
+    try:
+        sync_session = getattr(session, "sync_session", session)
+        consistency_service = ConsistencyService(sync_session, LLMService(session))
+        consistency_result = await consistency_service.check_consistency(
+            project_id=project_id,
+            chapter_text=selected_version.content,
+            user_id=current_user.id,
+            include_foreshadowing=True,
+        )
+        metadata = selected_version.metadata if isinstance(selected_version.metadata, dict) else {}
+        metadata["consistency_report"] = _format_consistency_report(consistency_result)
+        metadata["consistency_checked_at"] = datetime.utcnow().isoformat()
+        selected_version.metadata = metadata
+        await session.commit()
+    except Exception as exc:
+        logger.warning(
+            "项目 %s 第 %s 章自动一致性检查失败（不影响确认流程）: %s",
+            project_id,
+            request.chapter_number,
+            exc,
+        )
 
     return await _load_project_schema(novel_service, project_id, current_user.id)
 

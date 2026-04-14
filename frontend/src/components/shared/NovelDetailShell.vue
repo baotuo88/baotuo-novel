@@ -153,6 +153,7 @@
                 :class="componentContainerClass"
                 @edit="handleSectionEdit"
                 @add="startAddChapter"
+                @refresh="handleWorldGraphRefresh"
               />
             </div>
           </div>
@@ -531,7 +532,11 @@ const componentProps = computed(() => {
     case 'relationships':
       return { data: data || null, editable }
     case 'world_graph':
-      return { data: data || null }
+      return {
+        data: data || null,
+        editable,
+        projectId
+      }
     case 'chapter_outline':
       return { outline: data?.chapter_outline || [], editable }
     case 'chapters':
@@ -592,6 +597,12 @@ const handleSave = async (data: { field: string; content: any }) => {
   } catch (error) {
     console.error('保存变更失败:', error)
   }
+}
+
+const handleWorldGraphRefresh = async () => {
+  await loadSection('world_graph', true)
+  await loadSection('relationships', true)
+  await loadSection('world_setting', true)
 }
 
 const startAddChapter = async () => {

@@ -15,7 +15,9 @@ from ...schemas.user import (
     AuthOptions,
     PasswordForgotRequest,
     PasswordResetRequest,
+    UserSubscriptionBillingSummaryRead,
     UserSubscriptionRead,
+    UserSubscriptionUsageSummaryRead,
     Token,
     User,
     UserInDB,
@@ -91,6 +93,24 @@ async def read_current_user_subscription(
     service: UserSubscriptionService = Depends(get_user_subscription_service),
 ):
     return await service.get_user_subscription(current_user.id)
+
+
+@router.get("/subscription/usage-summary", response_model=UserSubscriptionUsageSummaryRead)
+async def read_current_user_subscription_usage_summary(
+    current_user: UserInDB = Depends(get_current_user),
+    service: UserSubscriptionService = Depends(get_user_subscription_service),
+):
+    return await service.get_usage_summary(current_user.id)
+
+
+@router.get("/subscription/billing", response_model=UserSubscriptionBillingSummaryRead)
+async def read_current_user_subscription_billing(
+    hours: int = 72,
+    limit: int = 100,
+    current_user: UserInDB = Depends(get_current_user),
+    service: UserSubscriptionService = Depends(get_user_subscription_service),
+):
+    return await service.get_billing_summary(current_user.id, hours=hours, limit=limit)
 
 
 @router.get("/linuxdo/login")

@@ -4,11 +4,12 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import get_current_user
 from ...db.session import get_session
+from ...models.faction import FactionRelationship
 from ...models.novel import Chapter
 from ...schemas.user import UserInDB
 from ...services.constitution_service import ConstitutionService
@@ -68,6 +69,15 @@ class FactionPayload(BaseModel):
     rules: Optional[List[str]] = None
     traditions: Optional[List[str]] = None
     extra: Optional[Dict[str, Any]] = None
+
+
+class FactionRelationshipPayload(BaseModel):
+    faction_from_id: int
+    faction_to_id: int
+    relationship_type: str
+    strength: Optional[int] = 5
+    description: Optional[str] = None
+    reason: Optional[str] = None
 
 
 class GraphNode(BaseModel):
@@ -698,3 +708,69 @@ async def put_factions(
             saved.append(await faction_service.create_faction(project_id, data))
 
     return {"project_id": project_id, "factions": [_model_to_dict(faction) for faction in saved]}
+
+
+@router.get("/{project_id}/faction-relationships")
+async def get_faction_relationships(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> Dict[str, Any]:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    faction_service = FactionService(session, PromptService(session))
+    relationships = await faction_service.get_faction_relationships(project_id)
+    return {
+        "project_id": project_id,
+        "relationships": [_model_to_dict(item) for item in relationships],
+    }
+
+
+@router.put("/{project_id}/faction-relationships")
+async def put_faction_relationships(
+    project_id: str,
+    payload: List[FactionRelationshipPayload] = Body(...),
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    覆盖保存势力关系图谱。
+    前端可直接提交当前画布上的完整关系列表，实现新增/删除/编辑的统一落库。
+    """
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    faction_service = FactionService(session, PromptService(session))
+    factions = await faction_service.get_factions_by_project(project_id)
+    faction_ids = {item.id for item in factions}
+
+    for relation in payload:
+        if relation.faction_from_id not in faction_ids or relation.faction_to_id not in faction_ids:
+            raise HTTPException(status_code=400, detail="势力关系包含无效的 faction_id")
+        if relation.faction_from_id == relation.faction_to_id:
+            raise HTTPException(status_code=400, detail="势力关系的起点和终点不能相同")
+
+    await session.execute(
+        delete(FactionRelationship).where(FactionRelationship.project_id == project_id)
+    )
+
+    for relation in payload:
+        session.add(
+            FactionRelationship(
+                project_id=project_id,
+                faction_from_id=relation.faction_from_id,
+                faction_to_id=relation.faction_to_id,
+                relationship_type=relation.relationship_type.strip() or "neutral",
+                strength=max(1, min(10, int(relation.strength or 5))),
+                description=(relation.description or "").strip() or None,
+                reason=(relation.reason or "").strip() or None,
+            )
+        )
+    await session.commit()
+
+    relationships = await faction_service.get_faction_relationships(project_id)
+    return {
+        "project_id": project_id,
+        "relationships": [_model_to_dict(item) for item in relationships],
+    }

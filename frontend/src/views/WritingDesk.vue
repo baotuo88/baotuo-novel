@@ -12,6 +12,40 @@
       @open-task-center="showTaskCenter = true"
     />
 
+    <div v-if="project" class="px-4 sm:px-6 lg:px-8 pt-4">
+      <div class="md-card md-card-filled preset-bar">
+        <div class="preset-summary">
+          <div class="preset-title">写作 Preset</div>
+          <div class="preset-desc">
+            当前：
+            <span class="preset-active">{{ activeWritingPreset?.name || '未设置' }}</span>
+          </div>
+        </div>
+        <div class="preset-actions">
+          <select v-model="selectedPresetId" class="preset-select">
+            <option value="">不使用预设</option>
+            <option v-for="item in writingPresets" :key="item.preset_id" :value="item.preset_id">
+              {{ item.name }}
+            </option>
+          </select>
+          <button
+            class="md-btn md-btn-tonal md-ripple"
+            :disabled="presetApplying || presetLoading"
+            @click="applyWritingPreset"
+          >
+            {{ presetApplying ? '应用中...' : '应用' }}
+          </button>
+          <button
+            class="md-btn md-btn-text md-ripple"
+            :disabled="presetApplying || presetLoading"
+            @click="clearWritingPreset"
+          >
+            清空
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- 主要内容区域 -->
     <div class="flex-1 min-h-0 w-full px-4 sm:px-6 lg:px-8 py-6 overflow-hidden">
       <!-- 加载状态 -->
@@ -118,7 +152,14 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useNovelStore } from '@/stores/novel'
-import type { Chapter, ChapterOutline, ChapterGenerationResponse, ChapterVersion } from '@/api/novel'
+import { NovelAPI } from '@/api/novel'
+import type {
+  Chapter,
+  ChapterOutline,
+  ChapterGenerationResponse,
+  ChapterVersion,
+  WritingPresetItem,
+} from '@/api/novel'
 import { globalAlert } from '@/composables/useAlert'
 import Tooltip from '@/components/Tooltip.vue'
 import WDHeader from '@/components/writing-desk/WDHeader.vue'
@@ -152,9 +193,16 @@ const editingChapter = ref<ChapterOutline | null>(null)
 const isGeneratingOutline = ref(false)
 const showGenerateOutlineModal = ref(false)
 const showTaskCenter = ref(false)
+const writingPresets = ref<WritingPresetItem[]>([])
+const selectedPresetId = ref('')
+const presetLoading = ref(false)
+const presetApplying = ref(false)
 
 // 计算属性
 const project = computed(() => novelStore.currentProject)
+const activeWritingPreset = computed(() =>
+  writingPresets.value.find((item) => item.is_active) || null
+)
 
 const selectedChapter = computed(() => {
   if (!project.value || selectedChapterNumber.value === null) return null
@@ -342,6 +390,36 @@ const availableVersions = computed(() => {
 
 
 // 方法
+const loadWritingPresets = async () => {
+  presetLoading.value = true
+  try {
+    writingPresets.value = await NovelAPI.listWriterPresets()
+    selectedPresetId.value = activeWritingPreset.value?.preset_id || ''
+  } catch (error) {
+    console.error('加载写作预设失败:', error)
+  } finally {
+    presetLoading.value = false
+  }
+}
+
+const applyWritingPreset = async () => {
+  presetApplying.value = true
+  try {
+    await NovelAPI.setActiveWriterPreset(selectedPresetId.value || null)
+    await loadWritingPresets()
+    globalAlert.showSuccess('写作预设已应用', 'Preset')
+  } catch (error) {
+    globalAlert.showError(`预设应用失败: ${error instanceof Error ? error.message : '未知错误'}`, 'Preset')
+  } finally {
+    presetApplying.value = false
+  }
+}
+
+const clearWritingPreset = async () => {
+  selectedPresetId.value = ''
+  await applyWritingPreset()
+}
+
 const goBack = () => {
   router.push('/workspace')
 }
@@ -646,6 +724,7 @@ const handleTaskUpdated = async (chapterNumber?: number) => {
 onMounted(() => {
   document.body.classList.add('m3-novel')
   loadProject()
+  loadWritingPresets()
 })
 
 onUnmounted(() => {
@@ -696,6 +775,71 @@ onUnmounted(() => {
   color: var(--md-on-surface);
   font-family: var(--md-font-family);
   animation: m3-fade 0.6s ease-out both;
+}
+
+.preset-bar {
+  border-radius: var(--md-radius-lg);
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.preset-summary {
+  min-width: 0;
+}
+
+.preset-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--md-on-surface);
+}
+
+.preset-desc {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+
+.preset-active {
+  color: var(--md-secondary);
+  font-weight: 600;
+}
+
+.preset-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.preset-select {
+  min-width: 220px;
+  height: 34px;
+  border: 1px solid var(--md-outline);
+  border-radius: 10px;
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .preset-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .preset-actions {
+    justify-content: flex-start;
+  }
+
+  .preset-select {
+    min-width: 0;
+    width: 100%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

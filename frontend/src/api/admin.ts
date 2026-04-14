@@ -238,6 +238,21 @@ export interface UserSubscriptionAuditItem {
   created_at: string
 }
 
+export interface UserSubscriptionCompensationPayload {
+  request_quota: number
+  note: string
+}
+
+export interface UserSubscriptionCompensationResult {
+  user_id: number
+  request_quota: number
+  before_daily_request_used: number
+  after_daily_request_used: number
+  note: string
+  operator: string
+  created_at: string
+}
+
 export interface UserCreatePayload {
   username: string
   email?: string
@@ -533,6 +548,16 @@ export class AdminAPI {
     if (params.limit != null) query.set('limit', String(params.limit))
     const qs = query.toString()
     return this.request(`/subscription-audits${qs ? `?${qs}` : ''}`)
+  }
+
+  static compensateUserSubscription(
+    id: number,
+    payload: UserSubscriptionCompensationPayload
+  ): Promise<UserSubscriptionCompensationResult> {
+    return this.request(`/users/${id}/subscription/compensation`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
   }
 
   static deleteUser(id: number): Promise<void> {

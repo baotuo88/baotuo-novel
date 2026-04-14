@@ -63,6 +63,8 @@ from ...schemas.user import (
     PasswordChangeRequest,
     User as UserSchema,
     UserSubscriptionAuditRead,
+    UserSubscriptionCompensationRead,
+    UserSubscriptionCompensationRequest,
     UserCreateAdmin,
     UserSubscriptionRead,
     UserSubscriptionUpsert,
@@ -1150,6 +1152,30 @@ async def upsert_user_subscription(
         item.status,
     )
     return item
+
+
+@router.post("/users/{user_id}/subscription/compensation", response_model=UserSubscriptionCompensationRead)
+async def compensate_user_subscription_request_quota(
+    user_id: int,
+    payload: UserSubscriptionCompensationRequest,
+    service: UserSubscriptionService = Depends(get_user_subscription_service),
+    current_admin=Depends(get_current_admin),
+) -> UserSubscriptionCompensationRead:
+    result = await service.apply_request_compensation(
+        user_id,
+        request_quota=payload.request_quota,
+        note=payload.note,
+        actor_user_id=current_admin.id,
+        actor_username=current_admin.username,
+    )
+    logger.info(
+        "管理员 %s 补偿用户请求额度：user_id=%s quota=%s note=%s",
+        current_admin.username,
+        user_id,
+        payload.request_quota,
+        payload.note,
+    )
+    return result
 
 
 @router.get("/subscription-audits", response_model=List[UserSubscriptionAuditRead])
