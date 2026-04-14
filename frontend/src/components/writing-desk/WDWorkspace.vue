@@ -65,6 +65,7 @@
           @regenerateChapter="$emit('regenerateChapter')"
           @evaluateChapter="$emit('evaluateChapter')"
           @showEvaluationDetail="$emit('showEvaluationDetail')"
+          @version-rolled-back="$emit('versionRolledBack', $event)"
         />
       </div>
     </div>
@@ -166,7 +167,8 @@ const emit = defineEmits([
   'showVersionSelector',
   'showEvaluationDetail',
   'fetchChapterStatus',
-  'editChapter'
+  'editChapter',
+  'versionRolledBack'
 ])
 
 const confirmRegenerateChapter = async () => {

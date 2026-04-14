@@ -6,7 +6,7 @@ import io
 from datetime import datetime, timedelta
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -257,6 +257,7 @@ async def _run_writer_retry_task(
                         chapter_number=chapter_number,
                         writing_notes=(writing_notes or None),
                     ),
+                    background_tasks=BackgroundTasks(),
                     session=task_session,
                     current_user=owner_user,
                 )

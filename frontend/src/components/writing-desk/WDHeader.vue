@@ -24,6 +24,12 @@
 
         <!-- 右侧：操作按钮 -->
         <div class="flex items-center gap-1 sm:gap-2">
+          <button @click="$emit('openTaskCenter')" class="md-btn md-btn-text md-ripple flex items-center gap-2">
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+              <path fill-rule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v2a1 1 0 102 0V6h12v8h-3a1 1 0 100 2h3a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm-1 9a3 3 0 016 0v4a3 3 0 11-6 0v-4zm2 0v4a1 1 0 102 0v-4a1 1 0 10-2 0z" clip-rule="evenodd"></path>
+            </svg>
+            <span class="hidden md:inline">任务中心</span>
+          </button>
           <button @click="$emit('viewProjectDetail')" class="md-btn md-btn-text md-ripple flex items-center gap-2">
             <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
               <path d="M10 12a2 2 0 100-4 2 2 0 000 4z"></path>
@@ -74,5 +80,5 @@ interface Props {
 
 defineProps<Props>()
 
-defineEmits(['goBack', 'viewProjectDetail', 'toggleSidebar'])
+defineEmits(['goBack', 'viewProjectDetail', 'toggleSidebar', 'openTaskCenter'])
 </script>

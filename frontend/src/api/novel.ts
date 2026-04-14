@@ -152,6 +152,98 @@ export interface ChapterGenerationResponse {
   chapter_number: number
 }
 
+export interface WriterTaskCenterItem {
+  task_id: string
+  chapter_id: number
+  project_id: string
+  chapter_number: number
+  status: string
+  queue_state: 'active' | 'failed' | 'done' | 'other'
+  progress_percent: number
+  stage_label: string
+  status_message: string
+  can_cancel: boolean
+  can_retry: boolean
+  word_count: number
+  selected_version_id?: number | null
+  updated_at: string
+  age_minutes: number
+  error_message?: string | null
+}
+
+export interface WriterTaskCenterResponse {
+  total: number
+  active_count: number
+  failed_count: number
+  done_count: number
+  items: WriterTaskCenterItem[]
+}
+
+export interface WriterTaskRetryPayload {
+  writing_notes?: string
+  force?: boolean
+}
+
+export interface WriterTaskRetryResponse {
+  accepted: boolean
+  task_id: string
+  project_id: string
+  chapter_number: number
+  previous_status: string
+  message: string
+}
+
+export interface WriterTaskCancelResponse {
+  accepted: boolean
+  task_id: string
+  project_id: string
+  chapter_number: number
+  message: string
+}
+
+export interface ChapterVersionDetail {
+  id: number
+  version_label?: string | null
+  created_at: string
+  content: string
+  metadata?: Record<string, any> | null
+  word_count: number
+  is_selected: boolean
+}
+
+export interface ChapterVersionListResponse {
+  project_id: string
+  chapter_number: number
+  selected_version_id?: number | null
+  total_versions: number
+  versions: ChapterVersionDetail[]
+}
+
+export interface ChapterVersionDiffResponse {
+  project_id: string
+  chapter_number: number
+  base_version_id: number
+  compare_version_id: number
+  base_version_label?: string | null
+  compare_version_label?: string | null
+  base_content: string
+  compare_content: string
+}
+
+export interface ChapterVersionRollbackPayload {
+  version_id: number
+  reason?: string
+}
+
+export interface ChapterVersionRollbackResponse {
+  project_id: string
+  chapter_number: number
+  selected_version_id: number
+  rollback_from_version_id?: number | null
+  rollback_to_version_id: number
+  message: string
+}
+
 export interface DeleteNovelsResponse {
   status: string
   message: string
@@ -315,6 +407,68 @@ export class NovelAPI {
         chapter_number: chapterNumber,
         version_index: versionIndex
       })
+    })
+  }
+
+  static async getWriterTaskCenter(
+    projectId: string,
+    query: { limit?: number; status_group?: 'active' | 'failed' | 'all' } = {}
+  ): Promise<WriterTaskCenterResponse> {
+    const params = new URLSearchParams()
+    if (query.limit != null) params.set('limit', String(query.limit))
+    if (query.status_group) params.set('status_group', query.status_group)
+    const queryString = params.toString()
+    return request(`${WRITER_BASE}/${projectId}/tasks${queryString ? `?${queryString}` : ''}`)
+  }
+
+  static async cancelWriterTask(
+    projectId: string,
+    chapterNumber: number
+  ): Promise<WriterTaskCancelResponse> {
+    return request(`${WRITER_BASE}/${projectId}/tasks/${chapterNumber}/cancel`, {
+      method: 'POST'
+    })
+  }
+
+  static async retryWriterTask(
+    projectId: string,
+    chapterNumber: number,
+    payload: WriterTaskRetryPayload = {}
+  ): Promise<WriterTaskRetryResponse> {
+    return request(`${WRITER_BASE}/${projectId}/tasks/${chapterNumber}/retry`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  }
+
+  static async listChapterVersions(
+    projectId: string,
+    chapterNumber: number
+  ): Promise<ChapterVersionListResponse> {
+    return request(`${WRITER_BASE}/${projectId}/chapters/${chapterNumber}/versions`)
+  }
+
+  static async getChapterVersionDiff(
+    projectId: string,
+    chapterNumber: number,
+    baseVersionId: number,
+    compareVersionId: number
+  ): Promise<ChapterVersionDiffResponse> {
+    const params = new URLSearchParams({
+      base_version_id: String(baseVersionId),
+      compare_version_id: String(compareVersionId)
+    })
+    return request(`${WRITER_BASE}/${projectId}/chapters/${chapterNumber}/versions/diff?${params.toString()}`)
+  }
+
+  static async rollbackChapterVersion(
+    projectId: string,
+    chapterNumber: number,
+    payload: ChapterVersionRollbackPayload
+  ): Promise<ChapterVersionRollbackResponse> {
+    return request(`${WRITER_BASE}/${projectId}/chapters/${chapterNumber}/versions/rollback`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
     })
   }
 

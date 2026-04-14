@@ -17,7 +17,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
@@ -30,9 +30,14 @@ from ...db.session import AsyncSessionLocal, get_session
 from ...models.novel import Chapter, ChapterOutline, ChapterVersion
 from ...schemas.novel import (
     Chapter as ChapterSchema,
-    ChapterGenerationStatus,
     AdvancedGenerateRequest,
     AdvancedGenerateResponse,
+    ChapterGenerationStatus,
+    ChapterVersionDiffResponse,
+    ChapterVersionListResponse,
+    ChapterVersionDetail,
+    ChapterVersionRollbackRequest,
+    ChapterVersionRollbackResponse,
     DeleteChapterRequest,
     EditChapterRequest,
     EvaluateChapterRequest,
@@ -43,6 +48,11 @@ from ...schemas.novel import (
     NovelProject as NovelProjectSchema,
     SelectVersionRequest,
     UpdateChapterOutlineRequest,
+    WriterTaskCenterCancelResponse,
+    WriterTaskCenterItem,
+    WriterTaskCenterResponse,
+    WriterTaskCenterRetryRequest,
+    WriterTaskCenterRetryResponse,
 )
 from ...schemas.user import UserInDB
 from ...services.chapter_context_service import ChapterContextService
@@ -61,6 +71,87 @@ from ...services.pipeline_orchestrator import PipelineOrchestrator
 
 router = APIRouter(prefix="/api/writer", tags=["Writer"])
 logger = logging.getLogger(__name__)
+
+_WRITER_ACTIVE_STATUSES = {
+    ChapterGenerationStatus.GENERATING.value,
+    ChapterGenerationStatus.EVALUATING.value,
+    ChapterGenerationStatus.SELECTING.value,
+    ChapterGenerationStatus.WAITING_FOR_CONFIRM.value,
+}
+_WRITER_FAILED_STATUSES = {
+    ChapterGenerationStatus.FAILED.value,
+    ChapterGenerationStatus.EVALUATION_FAILED.value,
+}
+_WRITER_DONE_STATUSES = {ChapterGenerationStatus.SUCCESSFUL.value}
+_WRITER_TASK_HANDLES: Dict[str, asyncio.Task] = {}
+_WRITER_TASK_OWNERS: Dict[str, int] = {}
+_WRITER_TASK_ERROR_MESSAGES: Dict[str, str] = {}
+
+
+def _build_writer_task_id(project_id: str, chapter_number: int) -> str:
+    return f"{project_id}:{chapter_number}"
+
+
+def _writer_queue_state(status_value: str) -> Literal["active", "failed", "done", "other"]:
+    if status_value in _WRITER_ACTIVE_STATUSES:
+        return "active"
+    if status_value in _WRITER_FAILED_STATUSES:
+        return "failed"
+    if status_value in _WRITER_DONE_STATUSES:
+        return "done"
+    return "other"
+
+
+def _writer_progress(status_value: str) -> Tuple[int, str, str]:
+    if status_value == ChapterGenerationStatus.GENERATING.value:
+        return 35, "生成正文", "AI 正在生成章节正文"
+    if status_value == ChapterGenerationStatus.EVALUATING.value:
+        return 72, "评审版本", "AI 正在评审候选版本"
+    if status_value == ChapterGenerationStatus.WAITING_FOR_CONFIRM.value:
+        return 88, "等待确认", "候选版本已生成，等待选择"
+    if status_value == ChapterGenerationStatus.SELECTING.value:
+        return 94, "确认版本", "正在确认最终版本"
+    if status_value == ChapterGenerationStatus.SUCCESSFUL.value:
+        return 100, "已完成", "章节已完成"
+    if status_value == ChapterGenerationStatus.EVALUATION_FAILED.value:
+        return 100, "评审失败", "版本评审失败，可重试"
+    if status_value == ChapterGenerationStatus.FAILED.value:
+        return 100, "生成失败", "章节生成失败，可重试"
+    return 0, "未开始", "任务尚未开始"
+
+
+def _dispatch_writer_generation_task(
+    *,
+    project_id: str,
+    chapter_number: int,
+    writing_notes: Optional[str],
+    user_id: int,
+) -> tuple[str, bool]:
+    task_id = _build_writer_task_id(project_id, chapter_number)
+    existing = _WRITER_TASK_HANDLES.get(task_id)
+    if existing and not existing.done():
+        return task_id, False
+
+    task = asyncio.create_task(
+        _generate_chapter_pipeline_async(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            writing_notes=writing_notes,
+            user_id=user_id,
+            task_id=task_id,
+        )
+    )
+    _WRITER_TASK_HANDLES[task_id] = task
+    _WRITER_TASK_OWNERS[task_id] = user_id
+
+    def _cleanup(_: asyncio.Task, task_key: str = task_id) -> None:
+        current = _WRITER_TASK_HANDLES.get(task_key)
+        if current is task:
+            _WRITER_TASK_HANDLES.pop(task_key, None)
+            _WRITER_TASK_OWNERS.pop(task_key, None)
+
+    task.add_done_callback(_cleanup)
+    return task_id, True
 
 
 async def _load_project_schema(service: NovelService, project_id: str, user_id: int) -> NovelProjectSchema:
@@ -371,7 +462,10 @@ async def _generate_chapter_pipeline_async(
     chapter_number: int,
     writing_notes: Optional[str],
     user_id: int,
+    task_id: Optional[str] = None,
 ) -> None:
+    task_key = task_id or _build_writer_task_id(project_id, chapter_number)
+    _WRITER_TASK_ERROR_MESSAGES.pop(task_key, None)
     async with AsyncSessionLocal() as bg_session:
         orchestrator = PipelineOrchestrator(bg_session)
         novel_service = NovelService(bg_session)
@@ -416,6 +510,7 @@ async def _generate_chapter_pipeline_async(
                 chapter_number,
                 user_id,
             )
+            _WRITER_TASK_ERROR_MESSAGES.pop(task_key, None)
         except asyncio.TimeoutError:
             logger.error(
                 "异步章节生成超时: project_id=%s chapter=%s user_id=%s max_seconds=%s",
@@ -428,6 +523,7 @@ async def _generate_chapter_pipeline_async(
                 chapter = await novel_service.get_or_create_chapter(project_id, chapter_number)
                 chapter.status = ChapterGenerationStatus.FAILED.value
                 await bg_session.commit()
+                _WRITER_TASK_ERROR_MESSAGES[task_key] = "任务执行超时，请重试（可减少生成版本数）"
             except Exception:
                 await bg_session.rollback()
                 logger.exception(
@@ -436,6 +532,28 @@ async def _generate_chapter_pipeline_async(
                     chapter_number,
                     user_id,
                 )
+                _WRITER_TASK_ERROR_MESSAGES[task_key] = "任务执行超时，且状态写回失败"
+        except asyncio.CancelledError:
+            logger.info(
+                "异步章节生成已取消: project_id=%s chapter=%s user_id=%s",
+                project_id,
+                chapter_number,
+                user_id,
+            )
+            try:
+                chapter = await novel_service.get_or_create_chapter(project_id, chapter_number)
+                chapter.status = ChapterGenerationStatus.FAILED.value
+                await bg_session.commit()
+            except Exception:
+                await bg_session.rollback()
+                logger.exception(
+                    "异步章节取消后写回状态失败: project_id=%s chapter=%s user_id=%s",
+                    project_id,
+                    chapter_number,
+                    user_id,
+                )
+            _WRITER_TASK_ERROR_MESSAGES[task_key] = "任务已取消"
+            raise
         except Exception as exc:
             logger.exception(
                 "异步章节生成失败: project_id=%s chapter=%s user_id=%s error=%s",
@@ -448,6 +566,7 @@ async def _generate_chapter_pipeline_async(
                 chapter = await novel_service.get_or_create_chapter(project_id, chapter_number)
                 chapter.status = ChapterGenerationStatus.FAILED.value
                 await bg_session.commit()
+                _WRITER_TASK_ERROR_MESSAGES[task_key] = f"任务执行异常: {str(exc)[:240]}"
             except Exception:
                 await bg_session.rollback()
                 logger.exception(
@@ -456,6 +575,7 @@ async def _generate_chapter_pipeline_async(
                     chapter_number,
                     user_id,
                 )
+                _WRITER_TASK_ERROR_MESSAGES[task_key] = "任务执行异常，且状态写回失败"
 
 
 @router.post("/advanced/generate", response_model=AdvancedGenerateResponse)
@@ -558,6 +678,207 @@ async def finalize_chapter(
     )
 
 
+@router.get("/novels/{project_id}/tasks", response_model=WriterTaskCenterResponse)
+async def get_writer_task_center(
+    project_id: str,
+    limit: int = 80,
+    status_group: Literal["active", "failed", "all"] = "all",
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> WriterTaskCenterResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit 必须在 1~500 之间")
+
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    stmt = (
+        select(Chapter)
+        .options(selectinload(Chapter.evaluations))
+        .where(Chapter.project_id == project_id)
+        .order_by(Chapter.updated_at.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+
+    if status_group == "active":
+        rows = [item for item in rows if (item.status or "").strip() in _WRITER_ACTIVE_STATUSES]
+    elif status_group == "failed":
+        rows = [item for item in rows if (item.status or "").strip() in _WRITER_FAILED_STATUSES]
+
+    now = datetime.utcnow()
+    items: list[WriterTaskCenterItem] = []
+    active_count = 0
+    failed_count = 0
+    done_count = 0
+
+    for chapter in rows:
+        status_value = (chapter.status or "not_generated").strip() or "not_generated"
+        queue_state = _writer_queue_state(status_value)
+        progress_percent, stage_label, status_message = _writer_progress(status_value)
+        task_id = _build_writer_task_id(chapter.project_id, chapter.chapter_number)
+
+        if queue_state == "active":
+            active_count += 1
+        elif queue_state == "failed":
+            failed_count += 1
+        elif queue_state == "done":
+            done_count += 1
+
+        updated_at = chapter.updated_at or chapter.created_at or now
+        if getattr(updated_at, "tzinfo", None) is not None:
+            updated_at = updated_at.replace(tzinfo=None)
+        age_minutes = max(0, int((now - updated_at).total_seconds() // 60))
+
+        task_handle = _WRITER_TASK_HANDLES.get(task_id)
+        task_owner_id = _WRITER_TASK_OWNERS.get(task_id)
+        can_cancel = bool(
+            queue_state == "active"
+            and task_handle is not None
+            and not task_handle.done()
+            and (task_owner_id is None or int(task_owner_id) == int(current_user.id))
+        )
+        can_retry = queue_state == "failed"
+
+        error_message: Optional[str] = None
+        if queue_state == "failed":
+            error_message = _WRITER_TASK_ERROR_MESSAGES.get(task_id)
+            if not error_message and chapter.evaluations:
+                failed_evals = [
+                    item for item in chapter.evaluations
+                    if ((item.decision or "").strip().lower() == "failed") and item.feedback
+                ]
+                if failed_evals:
+                    latest_failed = sorted(failed_evals, key=lambda item: item.created_at)[-1]
+                    error_message = latest_failed.feedback
+            if not error_message:
+                error_message = "任务失败，请重试。"
+
+        items.append(
+            WriterTaskCenterItem(
+                task_id=task_id,
+                chapter_id=chapter.id,
+                project_id=chapter.project_id,
+                chapter_number=chapter.chapter_number,
+                status=status_value,
+                queue_state=queue_state,
+                progress_percent=progress_percent,
+                stage_label=stage_label,
+                status_message=status_message,
+                can_cancel=can_cancel,
+                can_retry=can_retry,
+                word_count=chapter.word_count or 0,
+                selected_version_id=chapter.selected_version_id,
+                updated_at=updated_at,
+                age_minutes=age_minutes,
+                error_message=error_message,
+            )
+        )
+
+    return WriterTaskCenterResponse(
+        total=len(items),
+        active_count=active_count,
+        failed_count=failed_count,
+        done_count=done_count,
+        items=items,
+    )
+
+
+@router.post("/novels/{project_id}/tasks/{chapter_number}/cancel", response_model=WriterTaskCenterCancelResponse)
+async def cancel_writer_task(
+    project_id: str,
+    chapter_number: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> WriterTaskCenterCancelResponse:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    stmt = select(Chapter).where(
+        Chapter.project_id == project_id,
+        Chapter.chapter_number == chapter_number,
+    )
+    chapter = (await session.execute(stmt)).scalars().first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    task_id = _build_writer_task_id(project_id, chapter_number)
+    task_handle = _WRITER_TASK_HANDLES.get(task_id)
+    if task_handle is None or task_handle.done():
+        raise HTTPException(status_code=409, detail="当前任务未在运行中，无法取消")
+
+    task_owner = _WRITER_TASK_OWNERS.get(task_id)
+    if task_owner is not None and int(task_owner) != int(current_user.id):
+        raise HTTPException(status_code=403, detail="无权取消该任务")
+
+    task_handle.cancel()
+    chapter.status = ChapterGenerationStatus.FAILED.value
+    await session.commit()
+    _WRITER_TASK_ERROR_MESSAGES[task_id] = "任务已取消"
+
+    return WriterTaskCenterCancelResponse(
+        accepted=True,
+        task_id=task_id,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        message="任务取消请求已提交",
+    )
+
+
+@router.post("/novels/{project_id}/tasks/{chapter_number}/retry", response_model=WriterTaskCenterRetryResponse)
+async def retry_writer_task(
+    project_id: str,
+    chapter_number: int,
+    payload: WriterTaskCenterRetryRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> WriterTaskCenterRetryResponse:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    outline = await novel_service.get_outline(project_id, chapter_number)
+    if not outline:
+        raise HTTPException(status_code=400, detail="缺少章节大纲，无法重试生成")
+
+    chapter = await novel_service.get_or_create_chapter(project_id, chapter_number)
+    previous_status = (chapter.status or "not_generated").strip() or "not_generated"
+    task_id = _build_writer_task_id(project_id, chapter_number)
+    running_handle = _WRITER_TASK_HANDLES.get(task_id)
+
+    if running_handle and not running_handle.done():
+        if not payload.force:
+            raise HTTPException(status_code=409, detail="任务正在执行中，若要重试请开启 force")
+        running_handle.cancel()
+        _WRITER_TASK_HANDLES.pop(task_id, None)
+        _WRITER_TASK_OWNERS.pop(task_id, None)
+
+    if previous_status not in _WRITER_FAILED_STATUSES and not payload.force:
+        raise HTTPException(status_code=400, detail="当前任务不是失败状态，若要重试请开启 force")
+
+    chapter.real_summary = None
+    chapter.selected_version_id = None
+    chapter.status = ChapterGenerationStatus.GENERATING.value
+    await session.commit()
+    _WRITER_TASK_ERROR_MESSAGES.pop(task_id, None)
+
+    new_task_id, dispatched = _dispatch_writer_generation_task(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        writing_notes=payload.writing_notes,
+        user_id=current_user.id,
+    )
+
+    message = "重试任务已投递" if dispatched else "任务已在执行中，沿用现有任务"
+    return WriterTaskCenterRetryResponse(
+        accepted=True,
+        task_id=new_task_id,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        previous_status=previous_status,
+        message=message,
+    )
+
+
 @router.post("/novels/{project_id}/chapters/generate", response_model=NovelProjectSchema)
 async def generate_chapter(
     project_id: str,
@@ -585,44 +906,54 @@ async def generate_chapter(
             raise HTTPException(status_code=404, detail="蓝图中未找到对应章节纲要")
 
         chapter = await novel_service.get_or_create_chapter(project_id, request.chapter_number)
+        task_id = _build_writer_task_id(project_id, request.chapter_number)
+        running_handle = _WRITER_TASK_HANDLES.get(task_id)
         if chapter.status == ChapterGenerationStatus.GENERATING.value:
-            stale_seconds = _resolve_stale_generation_seconds()
-            age_seconds = _compute_age_seconds(chapter.updated_at or chapter.created_at)
-            if age_seconds is not None and age_seconds >= stale_seconds:
-                logger.warning(
-                    "检测到疑似卡死生成任务，自动回写失败状态并重新生成: project_id=%s chapter=%s age=%ss threshold=%ss",
-                    project_id,
-                    request.chapter_number,
-                    int(age_seconds),
-                    stale_seconds,
-                )
-                chapter.status = ChapterGenerationStatus.FAILED.value
-                await session.commit()
-            else:
+            if running_handle and not running_handle.done():
                 logger.info(
-                    "项目 %s 第 %s 章已在生成中，复用现有异步任务状态",
+                    "项目 %s 第 %s 章已在生成中，复用现有异步任务状态 task_id=%s",
                     project_id,
                     request.chapter_number,
+                    task_id,
                 )
                 return await _load_project_schema(novel_service, project_id, current_user.id)
+            else:
+                stale_seconds = _resolve_stale_generation_seconds()
+                age_seconds = _compute_age_seconds(chapter.updated_at or chapter.created_at)
+                if age_seconds is not None and age_seconds >= stale_seconds:
+                    logger.warning(
+                        "检测到疑似卡死生成任务，自动回写失败状态并重新生成: project_id=%s chapter=%s age=%ss threshold=%ss",
+                        project_id,
+                        request.chapter_number,
+                        int(age_seconds),
+                        stale_seconds,
+                    )
+                else:
+                    logger.warning(
+                        "章节状态为 generating 但未找到运行任务，将自动重新投递: project_id=%s chapter=%s",
+                        project_id,
+                        request.chapter_number,
+                    )
+                chapter.status = ChapterGenerationStatus.FAILED.value
+                await session.commit()
 
         chapter.real_summary = None
         chapter.selected_version_id = None
         chapter.status = ChapterGenerationStatus.GENERATING.value
         await session.commit()
-
-        background_tasks.add_task(
-            _generate_chapter_pipeline_async,
-            project_id,
-            request.chapter_number,
-            request.writing_notes,
-            current_user.id,
+        new_task_id, dispatched = _dispatch_writer_generation_task(
+            project_id=project_id,
+            chapter_number=request.chapter_number,
+            writing_notes=request.writing_notes,
+            user_id=current_user.id,
         )
         logger.info(
-            "项目 %s 第 %s 章异步生成任务已提交，用户 %s",
+            "项目 %s 第 %s 章异步生成任务已提交，用户 %s，task_id=%s dispatched=%s",
             project_id,
             request.chapter_number,
             current_user.id,
+            new_task_id,
+            dispatched,
         )
         return await _load_project_schema(novel_service, project_id, current_user.id)
 
@@ -1072,6 +1403,185 @@ async def select_chapter_version(
     return await _load_project_schema(novel_service, project_id, current_user.id)
 
 
+@router.get(
+    "/novels/{project_id}/chapters/{chapter_number}/versions",
+    response_model=ChapterVersionListResponse,
+)
+async def list_chapter_versions(
+    project_id: str,
+    chapter_number: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> ChapterVersionListResponse:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    stmt = (
+        select(Chapter)
+        .options(selectinload(Chapter.versions))
+        .where(
+            Chapter.project_id == project_id,
+            Chapter.chapter_number == chapter_number,
+        )
+    )
+    chapter = (await session.execute(stmt)).scalars().first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    versions = sorted(chapter.versions or [], key=lambda item: item.created_at, reverse=True)
+    now = datetime.utcnow()
+    items = [
+        ChapterVersionDetail(
+            id=item.id,
+            version_label=item.version_label,
+            created_at=item.created_at or now,
+            content=item.content,
+            metadata=item.metadata if isinstance(item.metadata, dict) else None,
+            word_count=len(item.content or ""),
+            is_selected=(chapter.selected_version_id == item.id),
+        )
+        for item in versions
+    ]
+
+    return ChapterVersionListResponse(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        selected_version_id=chapter.selected_version_id,
+        total_versions=len(items),
+        versions=items,
+    )
+
+
+@router.get(
+    "/novels/{project_id}/chapters/{chapter_number}/versions/diff",
+    response_model=ChapterVersionDiffResponse,
+)
+async def get_chapter_version_diff(
+    project_id: str,
+    chapter_number: int,
+    base_version_id: int,
+    compare_version_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> ChapterVersionDiffResponse:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    stmt = (
+        select(Chapter)
+        .options(selectinload(Chapter.versions))
+        .where(
+            Chapter.project_id == project_id,
+            Chapter.chapter_number == chapter_number,
+        )
+    )
+    chapter = (await session.execute(stmt)).scalars().first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    versions_map = {item.id: item for item in (chapter.versions or [])}
+    base_version = versions_map.get(base_version_id)
+    compare_version = versions_map.get(compare_version_id)
+    if not base_version or not compare_version:
+        raise HTTPException(status_code=404, detail="版本不存在")
+
+    return ChapterVersionDiffResponse(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        base_version_id=base_version.id,
+        compare_version_id=compare_version.id,
+        base_version_label=base_version.version_label,
+        compare_version_label=compare_version.version_label,
+        base_content=base_version.content,
+        compare_content=compare_version.content,
+    )
+
+
+@router.post(
+    "/novels/{project_id}/chapters/{chapter_number}/versions/rollback",
+    response_model=ChapterVersionRollbackResponse,
+)
+async def rollback_chapter_version(
+    project_id: str,
+    chapter_number: int,
+    payload: ChapterVersionRollbackRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> ChapterVersionRollbackResponse:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    stmt = (
+        select(Chapter)
+        .options(
+            selectinload(Chapter.versions),
+            selectinload(Chapter.selected_version),
+        )
+        .where(
+            Chapter.project_id == project_id,
+            Chapter.chapter_number == chapter_number,
+        )
+    )
+    chapter = (await session.execute(stmt)).scalars().first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    versions_map = {item.id: item for item in (chapter.versions or [])}
+    target_version = versions_map.get(payload.version_id)
+    if not target_version:
+        raise HTTPException(status_code=404, detail="目标版本不存在")
+
+    selected_before = chapter.selected_version
+    if selected_before and selected_before.id == target_version.id:
+        raise HTTPException(status_code=400, detail="当前已是该版本，无需回滚")
+
+    timestamp = datetime.utcnow().strftime("%m%d%H%M%S")
+    if selected_before and selected_before.content:
+        session.add(
+            ChapterVersion(
+                chapter_id=chapter.id,
+                content=selected_before.content,
+                version_label=f"snapshot-{timestamp}",
+                metadata={
+                    "source": "rollback_snapshot",
+                    "from_version_id": selected_before.id,
+                    "to_version_id": target_version.id,
+                },
+            )
+        )
+
+    restored_version = ChapterVersion(
+        chapter_id=chapter.id,
+        content=target_version.content,
+        version_label=f"rollback-{target_version.id}-{timestamp}",
+        metadata={
+            "source": "rollback",
+            "from_version_id": selected_before.id if selected_before else None,
+            "to_version_id": target_version.id,
+            "reason": (payload.reason or "").strip() or "manual",
+        },
+    )
+    session.add(restored_version)
+    await session.flush()
+
+    chapter.selected_version_id = restored_version.id
+    chapter.status = ChapterGenerationStatus.SUCCESSFUL.value
+    chapter.word_count = len(restored_version.content or "")
+    await session.commit()
+
+    task_id = _build_writer_task_id(project_id, chapter_number)
+    _WRITER_TASK_ERROR_MESSAGES.pop(task_id, None)
+
+    return ChapterVersionRollbackResponse(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        selected_version_id=restored_version.id,
+        rollback_from_version_id=selected_before.id if selected_before else None,
+        rollback_to_version_id=target_version.id,
+        message="已回滚到目标版本，并生成回滚快照",
+    )
+
+
 @router.post("/novels/{project_id}/chapters/evaluate", response_model=NovelProjectSchema)
 async def evaluate_chapter(
     project_id: str,
@@ -1319,25 +1829,19 @@ async def edit_chapter_content(
     
     await novel_service.ensure_project_owner(project_id, current_user.id)
     chapter = await novel_service.get_or_create_chapter(project_id, request.chapter_number)
-    
-    # 更新内容：优先更新选中版本，否则选最新版本或创建新版本
-    target_version = chapter.selected_version
-    if not target_version and chapter.versions:
-        target_version = sorted(chapter.versions, key=lambda item: item.created_at)[-1]
 
-    if target_version:
-        target_version.content = request.content
-        if not chapter.selected_version_id:
-            chapter.selected_version_id = target_version.id
-    else:
-        target_version = ChapterVersion(
-            chapter_id=chapter.id,
-            content=request.content,
-            version_label="manual_edit",
-        )
-        session.add(target_version)
-        await session.flush()
-        chapter.selected_version_id = target_version.id
+    manual_version = ChapterVersion(
+        chapter_id=chapter.id,
+        content=request.content,
+        version_label=f"manual-edit-{datetime.utcnow().strftime('%m%d%H%M%S')}",
+        metadata={
+            "source": "manual_edit",
+            "from_version_id": chapter.selected_version_id,
+        },
+    )
+    session.add(manual_version)
+    await session.flush()
+    chapter.selected_version_id = manual_version.id
     
     chapter.status = "successful"
     chapter.word_count = len(request.content or "")
@@ -1367,23 +1871,18 @@ async def edit_chapter_content_fast(
     await novel_service.ensure_project_owner(project_id, current_user.id)
     chapter = await novel_service.get_or_create_chapter(project_id, request.chapter_number)
 
-    target_version = chapter.selected_version
-    if not target_version and chapter.versions:
-        target_version = sorted(chapter.versions, key=lambda item: item.created_at)[-1]
-
-    if target_version:
-        target_version.content = request.content
-        if not chapter.selected_version_id:
-            chapter.selected_version_id = target_version.id
-    else:
-        target_version = ChapterVersion(
-            chapter_id=chapter.id,
-            content=request.content,
-            version_label="manual_edit",
-        )
-        session.add(target_version)
-        await session.flush()
-        chapter.selected_version_id = target_version.id
+    manual_version = ChapterVersion(
+        chapter_id=chapter.id,
+        content=request.content,
+        version_label=f"manual-edit-{datetime.utcnow().strftime('%m%d%H%M%S')}",
+        metadata={
+            "source": "manual_edit",
+            "from_version_id": chapter.selected_version_id,
+        },
+    )
+    session.add(manual_version)
+    await session.flush()
+    chapter.selected_version_id = manual_version.id
 
     chapter.status = "successful"
     chapter.word_count = len(request.content or "")

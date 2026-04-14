@@ -21,6 +21,16 @@
           </svg>
           查看所有版本
         </button>
+        <button
+          v-if="projectId"
+          @click="showVersionHistory = true"
+          class="md-btn md-btn-text md-ripple flex items-center gap-1"
+        >
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M4 3a1 1 0 000 2h1v11a1 1 0 102 0V5h6v11a1 1 0 102 0V5h1a1 1 0 100-2H4zm4 5a1 1 0 011 1v4a1 1 0 11-2 0V9a1 1 0 011-1zm4 0a1 1 0 011 1v4a1 1 0 11-2 0V9a1 1 0 011-1z" clip-rule="evenodd"></path>
+          </svg>
+          Diff/回滚
+        </button>
       </div>
     </div>
 
@@ -193,6 +203,14 @@
         </div>
       </div>
     </Teleport>
+
+    <WDVersionHistoryModal
+      :show="showVersionHistory"
+      :project-id="projectId"
+      :chapter-number="selectedChapter.chapter_number"
+      @close="showVersionHistory = false"
+      @rolled-back="handleVersionRolledBack"
+    />
   </div>
 </template>
 
@@ -201,6 +219,7 @@ import { ref } from 'vue'
 import { globalAlert } from '@/composables/useAlert'
 import type { Chapter } from '@/api/novel'
 import { OptimizerAPI } from '@/api/novel'
+import WDVersionHistoryModal from '@/components/writing-desk/WDVersionHistoryModal.vue'
 
 interface Props {
   selectedChapter: Chapter
@@ -209,7 +228,7 @@ interface Props {
 
 const props = defineProps<Props>()
 
-defineEmits(['showVersionSelector'])
+const emit = defineEmits(['showVersionSelector', 'versionRolledBack'])
 
 // 优化相关状态
 const showOptimizer = ref(false)
@@ -220,6 +239,7 @@ const isOptimizing = ref(false)
 const isApplying = ref(false)
 const optimizedContent = ref('')
 const optimizeResultNotes = ref('')
+const showVersionHistory = ref(false)
 
 // 优化维度配置
 const optimizeDimensions = [
@@ -307,6 +327,11 @@ const exportChapterAsTxt = (chapter?: Chapter | null) => {
   link.click()
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
+}
+
+const handleVersionRolledBack = (chapterNumber: number) => {
+  showVersionHistory.value = false
+  emit('versionRolledBack', chapterNumber)
 }
 
 const startOptimize = async () => {

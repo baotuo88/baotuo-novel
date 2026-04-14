@@ -9,6 +9,7 @@
       @go-back="goBack"
       @view-project-detail="viewProjectDetail"
       @toggle-sidebar="toggleSidebar"
+      @open-task-center="showTaskCenter = true"
     />
 
     <!-- 主要内容区域 -->
@@ -73,10 +74,19 @@
           @show-evaluation-detail="showEvaluationDetailModal = true"
           @fetch-chapter-status="fetchChapterStatus"
           @edit-chapter="editChapterContent"
+          @version-rolled-back="handleVersionRolledBack"
           />
         </div>
       </div>
     </div>
+    <WDTaskCenter
+      :show="showTaskCenter"
+      :project-id="project?.id"
+      :selected-chapter-number="selectedChapterNumber"
+      @close="showTaskCenter = false"
+      @jump-chapter="handleJumpToTaskChapter"
+      @task-updated="handleTaskUpdated"
+    />
     <WDVersionDetailModal
       :show="showVersionDetailModal"
       :detail-version-index="detailVersionIndex"
@@ -118,6 +128,7 @@ import WDVersionDetailModal from '@/components/writing-desk/WDVersionDetailModal
 import WDEvaluationDetailModal from '@/components/writing-desk/WDEvaluationDetailModal.vue'
 import WDEditChapterModal from '@/components/writing-desk/WDEditChapterModal.vue'
 import WDGenerateOutlineModal from '@/components/writing-desk/WDGenerateOutlineModal.vue'
+import WDTaskCenter from '@/components/writing-desk/WDTaskCenter.vue'
 
 interface Props {
   id: string
@@ -140,6 +151,7 @@ const showEditChapterModal = ref(false)
 const editingChapter = ref<ChapterOutline | null>(null)
 const isGeneratingOutline = ref(false)
 const showGenerateOutlineModal = ref(false)
+const showTaskCenter = ref(false)
 
 // 计算属性
 const project = computed(() => novelStore.currentProject)
@@ -602,6 +614,32 @@ const handleGenerateOutline = async (numChapters: number) => {
     globalAlert.showError(`生成大纲失败: ${error instanceof Error ? error.message : '未知错误'}`, '生成失败')
   } finally {
     isGeneratingOutline.value = false
+  }
+}
+
+const handleVersionRolledBack = async (chapterNumber: number) => {
+  try {
+    await novelStore.loadChapter(chapterNumber)
+    await novelStore.loadProject(props.id, true)
+    globalAlert.showSuccess(`第${chapterNumber}章已完成版本回滚`, '操作成功')
+  } catch (error) {
+    globalAlert.showError(`回滚后刷新失败: ${error instanceof Error ? error.message : '未知错误'}`)
+  }
+}
+
+const handleJumpToTaskChapter = (chapterNumber: number) => {
+  selectChapter(chapterNumber)
+  showTaskCenter.value = false
+}
+
+const handleTaskUpdated = async (chapterNumber?: number) => {
+  try {
+    await novelStore.loadProject(props.id, true)
+    if (chapterNumber != null) {
+      await novelStore.loadChapter(chapterNumber)
+    }
+  } catch (error) {
+    console.error('任务状态刷新失败:', error)
   }
 }
 

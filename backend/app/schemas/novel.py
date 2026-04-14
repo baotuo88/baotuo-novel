@@ -1,4 +1,5 @@
 # AIMETA P=小说模式_小说和章节请求响应|R=小说结构_章节结构|NR=不含业务逻辑|E=NovelSchema_ChapterSchema|X=internal|A=Pydantic模式|D=pydantic|S=none|RD=./README.ai
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
@@ -60,6 +61,7 @@ class Chapter(ChapterOutline):
     versions: Optional[List[str]] = None
     evaluation: Optional[str] = None
     generation_status: ChapterGenerationStatus = ChapterGenerationStatus.NOT_GENERATED
+    word_count: int = 0
 
 
 class Relationship(BaseModel):
@@ -236,3 +238,95 @@ class BlueprintPatch(BaseModel):
 class EditChapterRequest(BaseModel):
     chapter_number: int
     content: str
+
+
+class WriterTaskCenterItem(BaseModel):
+    task_id: str
+    chapter_id: int
+    project_id: str
+    chapter_number: int
+    status: str
+    queue_state: Literal["active", "failed", "done", "other"]
+    progress_percent: int
+    stage_label: str
+    status_message: str
+    can_cancel: bool = False
+    can_retry: bool = False
+    word_count: int = 0
+    selected_version_id: Optional[int] = None
+    updated_at: datetime
+    age_minutes: int = 0
+    error_message: Optional[str] = None
+
+
+class WriterTaskCenterResponse(BaseModel):
+    total: int
+    active_count: int
+    failed_count: int
+    done_count: int
+    items: List[WriterTaskCenterItem]
+
+
+class WriterTaskCenterRetryRequest(BaseModel):
+    writing_notes: Optional[str] = None
+    force: bool = False
+
+
+class WriterTaskCenterRetryResponse(BaseModel):
+    accepted: bool
+    task_id: str
+    project_id: str
+    chapter_number: int
+    previous_status: str
+    message: str
+
+
+class WriterTaskCenterCancelResponse(BaseModel):
+    accepted: bool
+    task_id: str
+    project_id: str
+    chapter_number: int
+    message: str
+
+
+class ChapterVersionDetail(BaseModel):
+    id: int
+    version_label: Optional[str] = None
+    created_at: datetime
+    content: str
+    metadata: Optional[Dict[str, Any]] = None
+    word_count: int = 0
+    is_selected: bool = False
+
+
+class ChapterVersionListResponse(BaseModel):
+    project_id: str
+    chapter_number: int
+    selected_version_id: Optional[int] = None
+    total_versions: int
+    versions: List[ChapterVersionDetail]
+
+
+class ChapterVersionDiffResponse(BaseModel):
+    project_id: str
+    chapter_number: int
+    base_version_id: int
+    compare_version_id: int
+    base_version_label: Optional[str] = None
+    compare_version_label: Optional[str] = None
+    base_content: str
+    compare_content: str
+
+
+class ChapterVersionRollbackRequest(BaseModel):
+    version_id: int
+    reason: Optional[str] = None
+
+
+class ChapterVersionRollbackResponse(BaseModel):
+    project_id: str
+    chapter_number: int
+    selected_version_id: int
+    rollback_from_version_id: Optional[int] = None
+    rollback_to_version_id: int
+    message: str
