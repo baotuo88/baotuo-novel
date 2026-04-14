@@ -20,6 +20,7 @@ from .update_log import UpdateLog
 from .usage_metric import UsageMetric
 from .user import User
 from .user_subscription import UserSubscription
+from .user_subscription_audit_log import UserSubscriptionAuditLog
 from .user_daily_request import UserDailyRequest
 from .system_config import SystemConfig
 
@@ -72,6 +73,7 @@ __all__ = [
     "UsageMetric",
     "User",
     "UserSubscription",
+    "UserSubscriptionAuditLog",
     "UserDailyRequest",
     "SystemConfig",
     # 项目记忆模型

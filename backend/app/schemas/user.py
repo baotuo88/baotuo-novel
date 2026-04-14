@@ -120,6 +120,22 @@ class UserSubscriptionRead(BaseModel):
     is_active: bool = Field(default=False, description="是否处于有效订阅期")
 
 
+class UserSubscriptionAuditRead(BaseModel):
+    """订阅审计日志响应。"""
+
+    id: int = Field(..., description="日志ID")
+    user_id: int = Field(..., description="用户ID")
+    admin_user_id: Optional[int] = Field(default=None, description="操作管理员ID")
+    admin_username: str = Field(..., description="操作管理员用户名")
+    action: str = Field(..., description="操作类型")
+    old_snapshot: str = Field(..., description="变更前快照(JSON)")
+    new_snapshot: str = Field(..., description="变更后快照(JSON)")
+    created_at: datetime = Field(..., description="创建时间")
+
+    class Config:
+        from_attributes = True
+
+
 class AuthOptions(BaseModel):
     """认证相关开关信息，供前端动态控制功能。"""
 

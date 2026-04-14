@@ -208,12 +208,16 @@ class LLMService:
 
         model_name = (config.get("model") or "").strip()
         provider = self._infer_provider(config.get("base_url"))
+        use_system_key = config.get("_uses_system_key") is True
+        subscription_plan = (config.get("_subscription_plan") or "").strip() or None
         try:
             model_name, budget_note = await self._apply_budget_policy(
                 model=model_name,
                 user_id=user_id,
                 project_id=project_id,
                 input_tokens=input_tokens,
+                use_system_key=use_system_key,
+                subscription_plan=subscription_plan,
             )
         except HTTPException as exc:
             await self._record_llm_call(
@@ -259,6 +263,8 @@ class LLMService:
                     project_id=project_id,
                     input_tokens=input_tokens,
                     allow_degrade=False,
+                    use_system_key=use_system_key,
+                    subscription_plan=subscription_plan,
                 )
                 if checked_model not in budget_filtered_candidates:
                     budget_filtered_candidates.append(checked_model)
@@ -589,7 +595,14 @@ class LLMService:
             value = min(max_value, value)
         return value
 
-    async def _load_budget_policy(self, user_id: Optional[int], project_id: Optional[str]) -> BudgetPolicy:
+    async def _load_budget_policy(
+        self,
+        user_id: Optional[int],
+        project_id: Optional[str],
+        *,
+        use_system_key: bool = False,
+        subscription_plan: Optional[str] = None,
+    ) -> BudgetPolicy:
         global_limit = await self._get_float_config(
             "llm.budget.daily_usd.global",
             default=0.0,
@@ -598,8 +611,10 @@ class LLMService:
         )
 
         user_limit = 0.0
+        has_user_override = False
         if user_id is not None:
             raw_user_limit = await self._get_config_value(f"llm.budget.daily_usd.user.{user_id}")
+            has_user_override = raw_user_limit not in (None, "")
             if raw_user_limit in (None, ""):
                 user_limit = await self._get_float_config(
                     "llm.budget.daily_usd.user.default",
@@ -613,6 +628,16 @@ class LLMService:
                 except Exception:
                     logger.warning("用户预算配置非法：user_id=%s value=%s", user_id, raw_user_limit)
                     user_limit = 0.0
+
+        # 套餐预算：仅在使用系统 Key 时生效，且仅在未单独覆盖用户预算时接管
+        if user_id is not None and use_system_key and subscription_plan and not has_user_override:
+            plan_budget_key = f"subscription.plan.{subscription_plan}.daily_budget_usd"
+            raw_plan_budget = await self._get_config_value(plan_budget_key)
+            if raw_plan_budget not in (None, ""):
+                try:
+                    user_limit = max(0.0, float(str(raw_plan_budget).strip()))
+                except Exception:
+                    logger.warning("套餐预算配置非法：plan=%s key=%s value=%s", subscription_plan, plan_budget_key, raw_plan_budget)
 
         project_limit = 0.0
         if project_id:
@@ -677,8 +702,15 @@ class LLMService:
         project_id: Optional[str],
         input_tokens: int,
         allow_degrade: bool = True,
+        use_system_key: bool = False,
+        subscription_plan: Optional[str] = None,
     ) -> tuple[str, Optional[str]]:
-        policy = await self._load_budget_policy(user_id=user_id, project_id=project_id)
+        policy = await self._load_budget_policy(
+            user_id=user_id,
+            project_id=project_id,
+            use_system_key=use_system_key,
+            subscription_plan=subscription_plan,
+        )
         current_model = (model or await self._get_config_value("llm.model") or "gpt-4o-mini").strip() or "gpt-4o-mini"
 
         if policy.global_limit_usd <= 0 and policy.user_limit_usd <= 0 and policy.project_limit_usd <= 0:
@@ -719,7 +751,7 @@ class LLMService:
             detail=f"LLM 预算熔断已触发：{'、'.join(exceeded_scopes)}，请稍后再试或调整预算配置",
         )
 
-    async def _resolve_llm_config(self, user_id: Optional[int]) -> Dict[str, Optional[str]]:
+    async def _resolve_llm_config(self, user_id: Optional[int]) -> Dict[str, Any]:
         if user_id:
             config = await self.llm_repo.get_by_user(user_id)
             custom_api_key = (config.llm_provider_api_key or "").strip() if config else ""
@@ -728,12 +760,15 @@ class LLMService:
                     "api_key": custom_api_key,
                     "base_url": config.llm_provider_url,
                     "model": config.llm_provider_model,
+                    "_uses_system_key": False,
+                    "_subscription_plan": None,
                 }
 
         # 未配置自定义 Key 时，按策略检查系统 Key 使用资格
+        subscription = None
         if user_id:
-            await self._enforce_system_key_subscription(user_id)
-            await self._enforce_daily_limit(user_id)
+            subscription = await self._enforce_system_key_subscription(user_id)
+            await self._enforce_daily_limit(user_id, subscription=subscription)
 
         api_key = await self._get_config_value("llm.api_key")
         base_url = await self._get_config_value("llm.base_url")
@@ -746,7 +781,13 @@ class LLMService:
                 detail="未配置默认 LLM API Key，请联系管理员配置系统默认 API Key 或在个人设置中配置自定义 API Key"
             )
 
-        return {"api_key": api_key, "base_url": base_url, "model": model}
+        return {
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": model,
+            "_uses_system_key": True,
+            "_subscription_plan": (subscription.plan_name if subscription else None),
+        }
 
     async def _is_system_key_subscription_required(self) -> bool:
         value = await self._get_config_value("subscription.require_for_system_key")
@@ -755,15 +796,15 @@ class LLMService:
         normalized = str(value).strip().lower()
         return normalized in {"1", "true", "yes", "on"}
 
-    async def _enforce_system_key_subscription(self, user_id: int) -> None:
+    async def _enforce_system_key_subscription(self, user_id: int):
         if not await self._is_system_key_subscription_required():
-            return
+            return None
 
         user = await self.user_repo.get(id=user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已被禁用")
         if user.is_admin:
-            return
+            return None
 
         subscription = await self.user_subscription_repo.get_by_user_id(user_id)
         if not subscription:
@@ -777,6 +818,7 @@ class LLMService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="当前账号订阅已失效，请续费后继续使用系统 Key，或改用自定义 API Key。",
             )
+        return subscription
 
     async def get_embedding(
         self,
@@ -1015,14 +1057,47 @@ class LLMService:
         vector_size_str = await self._get_config_value("embedding.model_vector_size")
         return int(vector_size_str) if vector_size_str else None
 
-    async def _enforce_daily_limit(self, user_id: int) -> None:
+    async def _resolve_daily_request_limit(self, user_id: int, subscription=None) -> int:
         limit_str = await self.admin_setting_service.get("daily_request_limit", "100")
-        limit = int(limit_str or 10)
+        try:
+            limit = int(limit_str or 10)
+        except Exception:
+            limit = 100
+
+        active_subscription = subscription
+        if active_subscription is None:
+            candidate = await self.user_subscription_repo.get_by_user_id(user_id)
+            if candidate and candidate.is_active(datetime.utcnow()):
+                active_subscription = candidate
+
+        if active_subscription:
+            plan_name = (active_subscription.plan_name or "").strip()
+            if plan_name:
+                plan_limit_key = f"subscription.plan.{plan_name}.daily_request_limit"
+                plan_limit_raw = await self._get_config_value(plan_limit_key)
+                if plan_limit_raw not in (None, ""):
+                    try:
+                        plan_limit = int(str(plan_limit_raw).strip())
+                        if plan_limit >= 0:
+                            return plan_limit
+                    except Exception:
+                        logger.warning(
+                            "套餐请求上限配置非法：user_id=%s plan=%s key=%s value=%s",
+                            user_id,
+                            plan_name,
+                            plan_limit_key,
+                            plan_limit_raw,
+                        )
+
+        return max(0, limit)
+
+    async def _enforce_daily_limit(self, user_id: int, *, subscription=None) -> None:
+        limit = await self._resolve_daily_request_limit(user_id, subscription=subscription)
         used = await self.user_repo.get_daily_request(user_id)
         if used >= limit:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="今日请求次数已达上限，请明日再试或设置自定义 API Key。",
+                detail="今日请求次数已达上限，请明日再试、升级订阅套餐，或设置自定义 API Key。",
             )
         await self.user_repo.increment_daily_request(user_id)
         await self.session.commit()

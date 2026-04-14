@@ -144,6 +144,20 @@
             </n-space>
           </n-form-item>
         </n-form>
+        <div class="subscription-audit-list">
+          <div class="subscription-audit-title">最近变更记录</div>
+          <div v-if="!subscriptionAudits.length" class="subscription-audit-empty">暂无记录</div>
+          <div v-for="item in subscriptionAudits" :key="item.id" class="subscription-audit-item">
+            <div class="subscription-audit-meta">
+              <span>{{ new Date(item.created_at).toLocaleString('zh-CN', { hour12: false }) }}</span>
+              <span>·</span>
+              <span>{{ item.admin_username }}</span>
+            </div>
+            <div class="subscription-audit-content">
+              {{ item.action }}: {{ item.new_snapshot }}
+            </div>
+          </div>
+        </div>
       </n-spin>
       <template #footer>
         <n-space justify="end">
@@ -186,6 +200,7 @@ import {
   AdminAPI,
   type AdminUser,
   type UserCreatePayload,
+  type UserSubscriptionAuditItem,
   type UserSubscriptionRead,
   type UserSubscriptionUpsertPayload,
 } from '@/api/admin'
@@ -206,6 +221,7 @@ const showSubscriptionModal = ref(false)
 const subscriptionLoading = ref(false)
 const subscriptionSubmitting = ref(false)
 const subscriptionTargetUser = ref<AdminUser | null>(null)
+const subscriptionAudits = ref<UserSubscriptionAuditItem[]>([])
 
 const formModel = reactive({
   username: '',
@@ -484,9 +500,14 @@ const handleManageSubscription = async (row: AdminUser) => {
   subscriptionTargetUser.value = row
   showSubscriptionModal.value = true
   subscriptionLoading.value = true
+  subscriptionAudits.value = []
   try {
-    const record = await AdminAPI.getUserSubscription(row.id)
+    const [record, audits] = await Promise.all([
+      AdminAPI.getUserSubscription(row.id),
+      AdminAPI.listSubscriptionAudits({ user_id: row.id, limit: 8 }),
+    ])
     applySubscriptionRecord(record)
+    subscriptionAudits.value = audits
   } catch (err) {
     message.error(err instanceof Error ? err.message : '加载订阅信息失败')
     subscriptionForm.plan_name = 'basic'
@@ -566,6 +587,45 @@ onMounted(fetchUsers)
 
 .search-input {
   width: min(230px, 60vw);
+}
+
+.subscription-audit-list {
+  margin-top: 8px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 12px;
+}
+
+.subscription-audit-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 8px;
+}
+
+.subscription-audit-empty {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.subscription-audit-item {
+  padding: 8px 0;
+  border-bottom: 1px dashed #e5e7eb;
+}
+
+.subscription-audit-meta {
+  font-size: 12px;
+  color: #6b7280;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.subscription-audit-content {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #374151;
+  line-height: 1.4;
+  word-break: break-all;
 }
 
 @media (max-width: 767px) {

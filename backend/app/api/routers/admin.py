@@ -62,6 +62,7 @@ from ...schemas.novel import (
 from ...schemas.user import (
     PasswordChangeRequest,
     User as UserSchema,
+    UserSubscriptionAuditRead,
     UserCreateAdmin,
     UserSubscriptionRead,
     UserSubscriptionUpsert,
@@ -1134,7 +1135,12 @@ async def upsert_user_subscription(
     service: UserSubscriptionService = Depends(get_user_subscription_service),
     current_admin=Depends(get_current_admin),
 ) -> UserSubscriptionRead:
-    item = await service.upsert_user_subscription(user_id, payload)
+    item = await service.upsert_user_subscription(
+        user_id,
+        payload,
+        actor_user_id=current_admin.id,
+        actor_username=current_admin.username,
+    )
     logger.info(
         "管理员 %s 更新用户订阅：user_id=%s plan=%s status=%s",
         current_admin.username,
@@ -1143,6 +1149,18 @@ async def upsert_user_subscription(
         item.status,
     )
     return item
+
+
+@router.get("/subscription-audits", response_model=List[UserSubscriptionAuditRead])
+async def list_subscription_audits(
+    user_id: Optional[int] = None,
+    limit: int = 100,
+    service: UserSubscriptionService = Depends(get_user_subscription_service),
+    _: None = Depends(get_current_admin),
+) -> List[UserSubscriptionAuditRead]:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit 必须在 1~500 之间")
+    return await service.list_audit_logs(user_id=user_id, limit=limit)
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -129,6 +129,26 @@ SYSTEM_CONFIG_DEFAULTS: list[SystemConfigDefault] = [
         description="无自定义 API Key 时，是否必须存在有效订阅才允许使用系统默认 Key。",
     ),
     SystemConfigDefault(
+        key="subscription.plan.basic.daily_request_limit",
+        value_getter=lambda _config: "200",
+        description="basic 套餐每日请求次数上限（仅系统 Key 生效）。",
+    ),
+    SystemConfigDefault(
+        key="subscription.plan.basic.daily_budget_usd",
+        value_getter=lambda _config: "0",
+        description="basic 套餐每日预算上限（USD，0 表示不限制，仅系统 Key 生效）。",
+    ),
+    SystemConfigDefault(
+        key="subscription.plan.pro.daily_request_limit",
+        value_getter=lambda _config: "500",
+        description="pro 套餐每日请求次数上限（仅系统 Key 生效）。",
+    ),
+    SystemConfigDefault(
+        key="subscription.plan.pro.daily_budget_usd",
+        value_getter=lambda _config: "5",
+        description="pro 套餐每日预算上限（USD，仅系统 Key 生效）。",
+    ),
+    SystemConfigDefault(
         key="linuxdo.client_id",
         value_getter=lambda config: config.linuxdo_client_id,
         description="Linux.do OAuth Client ID。",

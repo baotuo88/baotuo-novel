@@ -227,6 +227,17 @@ export interface UserSubscriptionUpsertPayload {
   expires_at?: string | null
 }
 
+export interface UserSubscriptionAuditItem {
+  id: number
+  user_id: number
+  admin_user_id?: number | null
+  admin_username: string
+  action: string
+  old_snapshot: string
+  new_snapshot: string
+  created_at: string
+}
+
 export interface UserCreatePayload {
   username: string
   email?: string
@@ -514,6 +525,14 @@ export class AdminAPI {
       method: 'PUT',
       body: JSON.stringify(payload)
     })
+  }
+
+  static listSubscriptionAudits(params: { user_id?: number; limit?: number } = {}): Promise<UserSubscriptionAuditItem[]> {
+    const query = new URLSearchParams()
+    if (params.user_id != null) query.set('user_id', String(params.user_id))
+    if (params.limit != null) query.set('limit', String(params.limit))
+    const qs = query.toString()
+    return this.request(`/subscription-audits${qs ? `?${qs}` : ''}`)
   }
 
   static deleteUser(id: number): Promise<void> {
