@@ -322,49 +322,52 @@ const columns: DataTableColumns<AdminUser> = [
     title: '操作',
     key: 'actions',
     align: 'center',
+    width: 250,
     render(row) {
-      return h(NSpace, { justify: 'center', size: 'small' }, {
-        default: () => [
-          h(
-            NButton,
-            {
-              size: 'small',
-              type: 'primary',
-              secondary: true,
-              onClick: () => handleEdit(row)
-            },
-            { default: () => '编辑' }
-          ),
-          h(
-            NButton,
-            {
-              size: 'small',
-              tertiary: true,
-              onClick: () => handleManageSubscription(row),
-            },
-            { default: () => '订阅' }
-          ),
-          h(
-            NPopconfirm,
-            {
-              onPositiveClick: () => handleDelete(row.id)
-            },
-            {
-              trigger: () => h(
-                NButton,
-                {
-                  size: 'small',
-                  type: 'error',
-                  secondary: true,
-                  disabled: row.is_admin
-                },
-                { default: () => '删除' }
-              ),
-              default: () => '确定要删除该用户吗？'
-            }
-          )
-        ]
-      })
+      return h('div', { class: 'user-action-group' }, [
+        h(
+          NButton,
+          {
+            size: 'small',
+            type: 'primary',
+            secondary: true,
+            class: 'user-action-btn',
+            onClick: () => handleEdit(row)
+          },
+          { default: () => '编辑' }
+        ),
+        h(
+          NButton,
+          {
+            size: 'small',
+            type: 'info',
+            secondary: true,
+            class: 'user-action-btn',
+            onClick: () => handleManageSubscription(row),
+          },
+          { default: () => '订阅' }
+        ),
+        h(
+          NPopconfirm,
+          {
+            onPositiveClick: () => handleDelete(row.id)
+          },
+          {
+            trigger: () => h(
+              NButton,
+              {
+                size: 'small',
+                type: 'error',
+                secondary: true,
+                class: 'user-action-btn user-action-btn-danger',
+                disabled: row.is_admin
+              },
+              { default: () => '删除' }
+            ),
+            default: () => '确定要删除该用户吗？'
+          }
+        )
+      ])
     }
   }
 ]
@@ -589,6 +592,27 @@ onMounted(fetchUsers)
   width: min(230px, 60vw);
 }
 
+.user-action-group {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.user-action-btn {
+  min-width: 58px;
+  border-radius: 999px;
+}
+
+.user-action-btn-danger {
+  min-width: 62px;
+}
+
+:deep(.user-table .n-data-table-td) {
+  vertical-align: middle;
+}
+
 .subscription-audit-list {
   margin-top: 8px;
   border-top: 1px solid #e5e7eb;
@@ -640,6 +664,15 @@ onMounted(fetchUsers)
 
   .search-input {
     width: 100%;
+  }
+
+  .user-action-group {
+    gap: 6px;
+  }
+
+  .user-action-btn {
+    min-width: 54px;
+    padding-inline: 8px;
   }
 }
 </style>
