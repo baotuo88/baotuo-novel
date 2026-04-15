@@ -5,6 +5,7 @@ import os
 from typing import Dict, List
 
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, status
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import get_current_user
@@ -64,6 +65,38 @@ IMPORTANT: 你的回复必须是合法的 JSON 对象，并严格包含以下字
 }
 不要输出额外的文本或解释。
 """
+
+
+def _normalize_converse_payload(payload: dict) -> dict:
+    """兜底修正 LLM 对话返回，避免因字段缺失导致 500。"""
+    normalized = dict(payload or {})
+
+    ai_message = normalized.get("ai_message")
+    if isinstance(ai_message, str):
+        normalized["ai_message"] = ai_message
+    elif ai_message is None:
+        normalized["ai_message"] = "我已收到你的设想，我们继续完善细节。"
+    else:
+        normalized["ai_message"] = str(ai_message)
+
+    is_complete = normalized.get("is_complete")
+    normalized["is_complete"] = bool(is_complete)
+
+    conversation_state = normalized.get("conversation_state")
+    normalized["conversation_state"] = conversation_state if isinstance(conversation_state, dict) else {}
+
+    ui_control = normalized.get("ui_control")
+    if not isinstance(ui_control, dict):
+        ui_control = {}
+    control_type = (ui_control.get("type") or "").strip()
+    if control_type not in {"single_choice", "text_input", "info_display"}:
+        control_type = "text_input"
+    normalized["ui_control"] = {
+        "type": control_type,
+        "options": ui_control.get("options"),
+        "placeholder": ui_control.get("placeholder") or "请输入你的补充设想...",
+    }
+    return normalized
 
 
 def _resolve_blueprint_poll_interval_seconds() -> int:
@@ -229,8 +262,21 @@ async def converse_with_concept(
     if parsed.get("is_complete"):
         parsed["ready_for_blueprint"] = True
 
-    parsed.setdefault("conversation_state", parsed.get("conversation_state", {}))
-    return ConverseResponse(**parsed)
+    parsed = _normalize_converse_payload(parsed)
+    try:
+        return ConverseResponse(**parsed)
+    except ValidationError as exc:
+        logger.exception(
+            "概念对话响应结构校验失败: project_id=%s user_id=%s error=%s parsed=%s",
+            project_id,
+            current_user.id,
+            exc,
+            json.dumps(parsed, ensure_ascii=False)[:1200],
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="概念对话失败，AI 返回结构不完整，请重试一次。若多次失败请检查模型提示词与返回格式。",
+        ) from exc
 
 
 @router.post("/{project_id}/blueprint/generate", response_model=BlueprintGenerationResponse)

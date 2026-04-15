@@ -34,8 +34,22 @@ const request = async (url: string, options: RequestInit = {}) => {
   }
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `请求失败，状态码: ${response.status}`)
+    const rawText = await response.text().catch(() => '')
+    let detail = ''
+
+    if (rawText) {
+      try {
+        const errorData = JSON.parse(rawText)
+        detail = errorData?.detail || errorData?.message || ''
+      } catch {
+        const trimmed = rawText.trim()
+        if (trimmed && !trimmed.toLowerCase().startsWith('<!doctype html')) {
+          detail = trimmed.slice(0, 200)
+        }
+      }
+    }
+
+    throw new Error(detail || `请求失败，状态码: ${response.status}`)
   }
 
   return response.json()
