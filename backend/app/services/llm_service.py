@@ -1119,22 +1119,28 @@ class LLMService:
                 if plan_limit_raw not in (None, ""):
                     try:
                         plan_limit = int(str(plan_limit_raw).strip())
-                        if plan_limit >= 0:
+                        if plan_limit == -1 or plan_limit >= 0:
                             return plan_limit
                     except Exception:
                         logger.warning(
-                            "套餐请求上限配置非法：user_id=%s plan=%s key=%s value=%s",
+                            "套餐请求上限配置非法，按订阅无限处理：user_id=%s plan=%s key=%s value=%s",
                             user_id,
                             plan_name,
                             plan_limit_key,
                             plan_limit_raw,
                         )
+            # 订阅生效期内默认无限请求；如需限制，请配置套餐 daily_request_limit。
+            return -1
 
         return max(0, limit)
 
     async def _enforce_daily_limit(self, user_id: int, *, subscription=None) -> None:
         limit = await self._resolve_daily_request_limit(user_id, subscription=subscription)
         used = await self.user_repo.get_daily_request(user_id)
+        if limit < 0:
+            await self.user_repo.increment_daily_request(user_id)
+            await self.session.commit()
+            return
         if used >= limit:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,

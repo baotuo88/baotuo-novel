@@ -29,8 +29,8 @@
 
       <div v-if="subscriptionUsage" class="mt-3 space-y-2">
         <div>
-          请求额度：{{ subscriptionUsage.daily_request_used }} / {{ subscriptionUsage.daily_request_limit }}
-          <span class="ml-2">({{ Math.round(subscriptionUsage.daily_request_ratio * 100) }}%)</span>
+          请求额度：{{ subscriptionUsage.daily_request_used }} / {{ requestLimitText }}
+          <span class="ml-2">({{ requestUsageRatioText }})</span>
         </div>
         <div>
           预算额度：$ {{ subscriptionUsage.today_estimated_cost_usd.toFixed(4) }}
@@ -320,6 +320,19 @@ const usageWarningClass = computed(() => {
   if (level === 'exceeded' || level === 'critical') return 'text-rose-700 font-semibold';
   if (level === 'warning') return 'text-amber-700 font-semibold';
   return 'text-emerald-700 font-semibold';
+});
+
+const requestLimitText = computed(() => {
+  if (!subscriptionUsage.value) return '-';
+  return subscriptionUsage.value.daily_request_limit < 0
+    ? '无限'
+    : String(subscriptionUsage.value.daily_request_limit);
+});
+
+const requestUsageRatioText = computed(() => {
+  if (!subscriptionUsage.value) return '-';
+  if (subscriptionUsage.value.daily_request_limit < 0) return '无限';
+  return `${Math.round(subscriptionUsage.value.daily_request_ratio * 100)}%`;
 });
 
 const loadSubscriptionMetrics = async () => {

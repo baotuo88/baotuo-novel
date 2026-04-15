@@ -1,5 +1,6 @@
 # AIMETA P=用户订阅服务_订阅查询和管理|R=订阅状态判断_管理员设置|NR=不含支付网关|E=UserSubscriptionService|X=internal|A=服务类|D=sqlalchemy|S=db|RD=./README.ai
 import json
+import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -20,6 +21,8 @@ from ..schemas.user import (
     UserSubscriptionUpsert,
     UserSubscriptionUsageSummaryRead,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class UserSubscriptionService:
@@ -243,10 +246,18 @@ class UserSubscriptionService:
                 if raw_limit not in (None, ""):
                     try:
                         parsed = int(str(raw_limit).strip())
-                        if parsed >= 0:
+                        if parsed == -1 or parsed >= 0:
                             return parsed
                     except Exception:
-                        pass
+                        logger.warning(
+                            "套餐请求上限配置非法，按订阅无限处理：user_id=%s plan=%s key=%s value=%s",
+                            user_id,
+                            plan_name,
+                            key,
+                            raw_limit,
+                        )
+            # 订阅生效期内默认无限请求；如需限制，请配置套餐 daily_request_limit。
+            return -1
 
         return max(0, default_limit)
 

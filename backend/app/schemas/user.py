@@ -144,7 +144,7 @@ class UserSubscriptionUsageSummaryRead(BaseModel):
     status: str = Field(..., description="订阅状态")
     is_active: bool = Field(default=False, description="订阅是否有效")
     daily_request_used: int = Field(default=0, description="今日已用请求数")
-    daily_request_limit: int = Field(default=0, description="今日请求上限")
+    daily_request_limit: int = Field(default=0, description="今日请求上限（-1 表示无限）")
     daily_request_ratio: float = Field(default=0.0, description="请求额度使用率")
     today_estimated_cost_usd: float = Field(default=0.0, description="今日估算花费(USD)")
     daily_budget_limit_usd: float = Field(default=0.0, description="日预算上限(USD)")
