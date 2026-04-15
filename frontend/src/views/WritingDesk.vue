@@ -15,14 +15,15 @@
     <div v-if="project" class="px-4 sm:px-6 lg:px-8 pt-4">
       <div class="md-card md-card-filled preset-bar">
         <div class="preset-summary">
-          <div class="preset-title">写作 Preset</div>
-          <div class="preset-desc">
-            当前：
-            <span class="preset-active">{{ activeWritingPreset?.name || '未设置' }}</span>
+          <div class="preset-title-row">
+            <div class="preset-title">写作 Preset</div>
+            <span v-if="activeWritingPreset" class="preset-state-chip">已启用</span>
+            <span v-else class="preset-state-chip muted">未启用</span>
           </div>
+          <div class="preset-desc">在此选择并应用写作风格预设。</div>
         </div>
         <div class="preset-actions">
-          <select v-model="selectedPresetId" class="preset-select">
+          <select id="writing-preset-select" v-model="selectedPresetId" class="preset-select">
             <option value="">不使用预设</option>
             <option v-for="item in writingPresets" :key="item.preset_id" :value="item.preset_id">
               {{ item.name }}
@@ -851,15 +852,34 @@ onUnmounted(() => {
   color: var(--md-on-surface);
 }
 
+.preset-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .preset-desc {
-  margin-top: 2px;
+  margin-top: 4px;
   font-size: 12px;
   color: var(--md-on-surface-variant);
 }
 
-.preset-active {
-  color: var(--md-secondary);
+.preset-state-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
   font-weight: 600;
+  color: var(--md-on-secondary-container);
+  background: color-mix(in srgb, var(--md-secondary-container) 90%, white 10%);
+}
+
+.preset-state-chip.muted {
+  color: var(--md-on-surface-variant);
+  background: color-mix(in srgb, var(--md-outline-variant) 60%, white 40%);
 }
 
 .preset-actions {
