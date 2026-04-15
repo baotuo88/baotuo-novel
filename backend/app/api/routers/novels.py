@@ -2,7 +2,8 @@
 import json
 import logging
 import os
-from typing import Dict, List
+import re
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, status
 from pydantic import ValidationError
@@ -68,6 +69,77 @@ IMPORTANT: 你的回复必须是合法的 JSON 对象，并严格包含以下字
 """
 
 
+_CHOICE_LINE_PATTERN = re.compile(r"^\s*([A-Z])[\)\）\.\、:：]\s*(.+?)\s*$")
+
+
+def _extract_choice_options_from_message(message: str) -> List[Dict[str, str]]:
+    """从 AI 文本中提取 A/B/C 形式选项，兜底生成按钮。"""
+    if not message:
+        return []
+
+    options: List[Dict[str, str]] = []
+    seen_ids: set[str] = set()
+
+    for raw_line in message.splitlines():
+        line = (raw_line or "").strip()
+        if not line:
+            continue
+        matched = _CHOICE_LINE_PATTERN.match(line)
+        if not matched:
+            continue
+
+        option_id = matched.group(1).lower()
+        if option_id in seen_ids:
+            continue
+
+        label = matched.group(2).strip()
+        if " (" in label:
+            label = label.split(" (", 1)[0].strip()
+        if "（" in label:
+            label = label.split("（", 1)[0].strip()
+        if not label:
+            continue
+
+        options.append({"id": option_id, "label": label})
+        seen_ids.add(option_id)
+        if len(options) >= 12:
+            break
+
+    return options
+
+
+def _normalize_choice_options(raw_options: Any) -> List[Dict[str, str]]:
+    """将模型返回 options 归一化为 [{id,label}]。"""
+    if not isinstance(raw_options, list):
+        return []
+
+    normalized: List[Dict[str, str]] = []
+    seen_ids: set[str] = set()
+
+    for item in raw_options:
+        option_id = ""
+        label = ""
+
+        if isinstance(item, dict):
+            option_id = str(item.get("id", "")).strip().lower()
+            label = str(item.get("label", "")).strip()
+        elif isinstance(item, str):
+            label = item.strip()
+            option_id = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+
+        if not label:
+            continue
+        if not option_id:
+            option_id = f"option-{len(normalized) + 1}"
+        if option_id in seen_ids:
+            continue
+
+        normalized.append({"id": option_id, "label": label})
+        seen_ids.add(option_id)
+
+    return normalized
+
+
 def _normalize_converse_payload(payload: dict) -> dict:
     """兜底修正 LLM 对话返回，避免因字段缺失导致 500。"""
     normalized = dict(payload or {})
@@ -89,12 +161,23 @@ def _normalize_converse_payload(payload: dict) -> dict:
     ui_control = normalized.get("ui_control")
     if not isinstance(ui_control, dict):
         ui_control = {}
-    control_type = (ui_control.get("type") or "").strip()
+    control_type = str(ui_control.get("type") or "").strip()
     if control_type not in {"single_choice", "text_input", "info_display"}:
         control_type = "text_input"
+
+    options = _normalize_choice_options(ui_control.get("options"))
+    inferred_options = _extract_choice_options_from_message(normalized["ai_message"])
+    if inferred_options and not options:
+        options = inferred_options
+    if options:
+        control_type = "single_choice"
+    elif control_type == "single_choice":
+        # 避免 single_choice 无选项导致前端“看起来可选但无法点击”。
+        control_type = "text_input"
+
     normalized["ui_control"] = {
         "type": control_type,
-        "options": ui_control.get("options"),
+        "options": options or None,
         "placeholder": ui_control.get("placeholder") or "请输入你的补充设想...",
     }
     return normalized
