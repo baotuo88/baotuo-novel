@@ -34,8 +34,8 @@
         </div>
         <div>
           预算额度：$ {{ subscriptionUsage.today_estimated_cost_usd.toFixed(4) }}
-          / $ {{ subscriptionUsage.daily_budget_limit_usd.toFixed(4) }}
-          <span class="ml-2">({{ Math.round(subscriptionUsage.daily_budget_ratio * 100) }}%)</span>
+          / {{ budgetLimitText }}
+          <span class="ml-2">({{ budgetUsageRatioText }})</span>
         </div>
         <div>
           预警等级：
@@ -333,6 +333,18 @@ const requestUsageRatioText = computed(() => {
   if (!subscriptionUsage.value) return '-';
   if (subscriptionUsage.value.daily_request_limit < 0) return '无限';
   return `${Math.round(subscriptionUsage.value.daily_request_ratio * 100)}%`;
+});
+
+const budgetLimitText = computed(() => {
+  if (!subscriptionUsage.value) return '-';
+  if (subscriptionUsage.value.daily_budget_limit_usd <= 0) return '无限';
+  return `$ ${subscriptionUsage.value.daily_budget_limit_usd.toFixed(4)}`;
+});
+
+const budgetUsageRatioText = computed(() => {
+  if (!subscriptionUsage.value) return '-';
+  if (subscriptionUsage.value.daily_budget_limit_usd <= 0) return '无限';
+  return `${Math.round(subscriptionUsage.value.daily_budget_ratio * 100)}%`;
 });
 
 const loadSubscriptionMetrics = async () => {
