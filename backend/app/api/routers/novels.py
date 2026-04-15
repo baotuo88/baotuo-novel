@@ -30,6 +30,7 @@ from ...services.llm_service import LLMService
 from ...services.novel_service import NovelService
 from ...services.prompt_service import PromptService
 from ...services.blueprint_generation_service import (
+    _ensure_prompt,
     blueprint_completion_message,
     generate_blueprint_for_project,
 )

@@ -26,7 +26,13 @@ class LLMClient:
         if not key:
             raise ValueError("缺少 OPENAI_API_KEY 配置，请在数据库或环境变量中补全。")
 
-        self._client = AsyncOpenAI(api_key=key, base_url=base_url or os.environ.get("OPENAI_API_BASE"))
+        resolved_base_url = (
+            base_url
+            or os.environ.get("OPENAI_API_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+            or os.environ.get("OPENAI_API_BASE")
+        )
+        self._client = AsyncOpenAI(api_key=key, base_url=resolved_base_url)
 
     async def stream_chat(
         self,
@@ -40,7 +46,7 @@ class LLMClient:
         **kwargs,
     ) -> AsyncGenerator[Dict[str, str], None]:
         payload = {
-            "model": model or os.environ.get("MODEL", "gpt-3.5-turbo"),
+            "model": model or os.environ.get("OPENAI_MODEL_NAME") or os.environ.get("MODEL", "gpt-4o-mini"),
             "messages": [msg.to_dict() for msg in messages],
             "stream": True,
             "timeout": timeout,
