@@ -3,7 +3,8 @@ import asyncio
 import logging
 import csv
 import io
-from datetime import datetime, timedelta
+import os
+from datetime import datetime, timedelta, timezone
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -17,6 +18,7 @@ from ...models import (
     Chapter,
     ChapterOutline,
     ChapterVersion,
+    GenerationTask,
     LLMCallLog,
     NovelProject,
     SystemConfig,
@@ -34,6 +36,8 @@ from ...schemas.admin import (
     LLMBudgetAlertItem,
     LLMBudgetAlertResponse,
     WriterTaskQueueItem,
+    WriterTaskQueueSummary,
+    WriterTaskFailureTopItem,
     WriterTaskQueueResponse,
     WriterTaskRetryRequest,
     WriterTaskRetryResponse,
@@ -78,6 +82,15 @@ from ...services.prompt_service import PromptService
 from ...services.update_log_service import UpdateLogService
 from ...services.user_service import UserService
 from ...services.user_subscription_service import UserSubscriptionService
+from ...services.generation_task_service import (
+    TASK_STATUS_CANCELED,
+    TASK_STATUS_COMPLETED,
+    TASK_STATUS_FAILED,
+    TASK_STATUS_QUEUED,
+    TASK_STATUS_RUNNING,
+    TASK_TYPE_BLUEPRINT_GENERATION,
+    TASK_TYPE_CHAPTER_GENERATION,
+)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -85,6 +98,23 @@ router = APIRouter(prefix="/api/admin", tags=["Admin"])
 _WRITER_ACTIVE_STATUSES = {"generating", "evaluating", "waiting_for_confirm"}
 _WRITER_FAILED_STATUSES = {"failed", "evaluation_failed"}
 _WRITER_RETRY_INFLIGHT: set[int] = set()
+
+
+def _parse_env_int(name: str, default: int, min_value: int, max_value: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = default
+    return max(min_value, min(max_value, value))
+
+
+_WRITER_TASK_HEARTBEAT_TIMEOUT_SECONDS = _parse_env_int(
+    "GENERATION_TASK_STALE_TIMEOUT_SECONDS",
+    default=300,
+    min_value=30,
+    max_value=3600,
+)
 
 
 def get_prompt_service(session: AsyncSession = Depends(get_session)) -> PromptService:
@@ -891,71 +921,183 @@ async def get_writer_task_queue(
     session: AsyncSession = Depends(get_session),
     _: None = Depends(get_current_admin),
 ) -> WriterTaskQueueResponse:
-    """返回写作任务队列视图（基于章节状态）。"""
+    """返回写作任务队列视图（基于 generation_tasks 持久化任务）。"""
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit 必须在 1~500 之间")
 
-    active_statuses = {"generating", "evaluating", "waiting_for_confirm"}
-    failed_statuses = {"failed", "evaluation_failed"}
+    task_types = [TASK_TYPE_CHAPTER_GENERATION, TASK_TYPE_BLUEPRINT_GENERATION]
+    active_statuses = {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING}
+    failed_statuses = {TASK_STATUS_FAILED, TASK_STATUS_CANCELED}
+    now_utc = datetime.now(timezone.utc)
+
+    def _queue_state(task_status: str) -> str:
+        if task_status in active_statuses:
+            return "active"
+        if task_status in failed_statuses:
+            return "failed"
+        if task_status == TASK_STATUS_COMPLETED:
+            return "done"
+        return "other"
+
+    def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
+        if dt is None:
+            return None
+        if getattr(dt, "tzinfo", None) is None:
+            return dt
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+    def _age_seconds(dt: Optional[datetime]) -> int:
+        if not dt:
+            return 0
+        value = dt if getattr(dt, "tzinfo", None) is not None else dt.replace(tzinfo=timezone.utc)
+        return max(0, int((now_utc - value).total_seconds()))
+
+    base_filters = [GenerationTask.task_type.in_(task_types)]
+    if project_id:
+        base_filters.append(GenerationTask.project_id == project_id)
+    if user_id is not None:
+        base_filters.append(GenerationTask.user_id == user_id)
+
+    status_rows = (
+        await session.execute(
+            select(GenerationTask.status, func.count(GenerationTask.id))
+            .where(*base_filters)
+            .group_by(GenerationTask.status)
+        )
+    ).all()
+    status_counts_all = {str(row[0] or "unknown"): int(row[1] or 0) for row in status_rows}
+
+    running_rows = (
+        await session.execute(
+            select(
+                GenerationTask.heartbeat_at,
+                GenerationTask.updated_at,
+                GenerationTask.started_at,
+                GenerationTask.created_at,
+            ).where(*base_filters, GenerationTask.status == TASK_STATUS_RUNNING)
+        )
+    ).all()
+    running_age_minutes_values: list[int] = []
+    stale_running_count = 0
+    for heartbeat_at, updated_at, started_at, created_at in running_rows:
+        running_anchor = started_at or updated_at or created_at
+        running_age_minutes_values.append(_age_seconds(running_anchor) // 60)
+        heartbeat_anchor = heartbeat_at or updated_at or started_at or created_at
+        if _age_seconds(heartbeat_anchor) >= _WRITER_TASK_HEARTBEAT_TIMEOUT_SECONDS:
+            stale_running_count += 1
+    avg_running_age_minutes = (
+        round(sum(running_age_minutes_values) / len(running_age_minutes_values), 2)
+        if running_age_minutes_values
+        else 0.0
+    )
+
+    failure_rows = (
+        await session.execute(
+            select(
+                GenerationTask.error_message,
+                GenerationTask.status_message,
+            )
+            .where(*base_filters, GenerationTask.status.in_(failed_statuses))
+            .order_by(GenerationTask.updated_at.desc())
+            .limit(400)
+        )
+    ).all()
+    failure_counter: dict[str, tuple[str, int]] = {}
+    for error_message, status_message in failure_rows:
+        message = str(error_message or status_message or "任务失败").strip()
+        key = message.splitlines()[0][:140] or "任务失败"
+        sample = message[:260] or key
+        previous = failure_counter.get(key)
+        if not previous:
+            failure_counter[key] = (sample, 1)
+        else:
+            failure_counter[key] = (previous[0], previous[1] + 1)
+    failure_top = sorted(failure_counter.items(), key=lambda item: item[1][1], reverse=True)[:8]
+    failure_top_items = [
+        WriterTaskFailureTopItem(error_key=key, sample_message=meta[0], count=meta[1]) for key, meta in failure_top
+    ]
 
     stmt = (
         select(
-            Chapter,
+            GenerationTask,
             NovelProject.title,
             NovelProject.user_id,
             User.username,
         )
-        .join(NovelProject, Chapter.project_id == NovelProject.id)
+        .join(NovelProject, GenerationTask.project_id == NovelProject.id)
         .join(User, NovelProject.user_id == User.id, isouter=True)
+        .where(*base_filters)
     )
 
-    if project_id:
-        stmt = stmt.where(Chapter.project_id == project_id)
-    if user_id is not None:
-        stmt = stmt.where(NovelProject.user_id == user_id)
     if status_group == "active":
-        stmt = stmt.where(Chapter.status.in_(active_statuses))
+        stmt = stmt.where(GenerationTask.status.in_(active_statuses))
     elif status_group == "failed":
-        stmt = stmt.where(Chapter.status.in_(failed_statuses))
+        stmt = stmt.where(GenerationTask.status.in_(failed_statuses))
 
-    stmt = stmt.order_by(Chapter.updated_at.desc()).limit(limit)
+    stmt = stmt.order_by(GenerationTask.updated_at.desc(), GenerationTask.created_at.desc()).limit(limit)
     rows = (await session.execute(stmt)).all()
 
-    now = datetime.utcnow()
+    chapter_meta_map: dict[tuple[str, int], Chapter] = {}
+    project_ids = {str(task.project_id) for task, _, _, _ in rows if task.chapter_number is not None}
+    chapter_numbers = {int(task.chapter_number) for task, _, _, _ in rows if task.chapter_number is not None}
+    if project_ids and chapter_numbers:
+        chapter_rows = (
+            await session.execute(
+                select(Chapter).where(
+                    Chapter.project_id.in_(project_ids),
+                    Chapter.chapter_number.in_(chapter_numbers),
+                )
+            )
+        ).scalars().all()
+        chapter_meta_map = {(str(chapter.project_id), int(chapter.chapter_number)): chapter for chapter in chapter_rows}
+
     items: list[WriterTaskQueueItem] = []
-    status_counts: dict[str, int] = {}
 
-    for chapter, project_title, owner_user_id, owner_username in rows:
-        status_value = (chapter.status or "unknown").strip() or "unknown"
-        status_counts[status_value] = status_counts.get(status_value, 0) + 1
+    for task, project_title, owner_user_id, owner_username in rows:
+        status_value = (task.status or "unknown").strip() or "unknown"
+        queue_state = _queue_state(status_value)
 
-        if status_value in active_statuses:
-            queue_state = "active"
-        elif status_value in failed_statuses:
-            queue_state = "failed"
-        elif status_value in {"successful", "completed"}:
-            queue_state = "done"
-        else:
-            queue_state = "other"
+        chapter_key = (
+            (str(task.project_id), int(task.chapter_number))
+            if task.chapter_number is not None
+            else None
+        )
+        chapter_meta = chapter_meta_map.get(chapter_key) if chapter_key else None
 
-        updated_at = chapter.updated_at or chapter.created_at or now
-        if getattr(updated_at, "tzinfo", None) is not None:
-            updated_at = updated_at.replace(tzinfo=None)
-        age_minutes = max(0, int((now - updated_at).total_seconds() // 60))
+        updated_at = task.updated_at or task.created_at or now_utc
+        age_anchor = (
+            task.started_at if status_value == TASK_STATUS_RUNNING and task.started_at else updated_at
+        )
+        age_minutes = _age_seconds(age_anchor) // 60
+
+        heartbeat_age_seconds: Optional[int] = None
+        heartbeat_at = task.heartbeat_at
+        if status_value == TASK_STATUS_RUNNING:
+            heartbeat_anchor = heartbeat_at or updated_at or task.started_at or task.created_at
+            heartbeat_age_seconds = _age_seconds(heartbeat_anchor)
 
         items.append(
             WriterTaskQueueItem(
-                chapter_id=chapter.id,
-                project_id=chapter.project_id,
-                project_title=str(project_title or chapter.project_id),
-                chapter_number=chapter.chapter_number,
+                task_id=task.id,
+                task_type=task.task_type,
+                chapter_id=chapter_meta.id if chapter_meta else None,
+                project_id=task.project_id,
+                project_title=str(project_title or task.project_id),
+                chapter_number=task.chapter_number,
                 status=status_value,
                 queue_state=queue_state,
                 owner_user_id=int(owner_user_id),
                 owner_username=str(owner_username) if owner_username else None,
-                word_count=chapter.word_count or 0,
-                selected_version_id=chapter.selected_version_id,
-                updated_at=updated_at,
+                progress_percent=max(0, min(100, int(task.progress_percent or 0))),
+                stage_label=task.stage_label,
+                status_message=task.status_message,
+                error_message=task.error_message,
+                retry_count=max(0, int(task.retry_count or 0)),
+                word_count=chapter_meta.word_count or 0 if chapter_meta else 0,
+                selected_version_id=chapter_meta.selected_version_id if chapter_meta else None,
+                heartbeat_at=_to_naive_utc(heartbeat_at),
+                heartbeat_age_seconds=heartbeat_age_seconds,
+                updated_at=_to_naive_utc(updated_at) or datetime.utcnow(),
                 age_minutes=age_minutes,
             )
         )
@@ -967,10 +1109,22 @@ async def get_writer_task_queue(
         project_id,
         user_id,
     )
+    summary = WriterTaskQueueSummary(
+        queued_count=int(status_counts_all.get(TASK_STATUS_QUEUED, 0)),
+        running_count=int(status_counts_all.get(TASK_STATUS_RUNNING, 0)),
+        completed_count=int(status_counts_all.get(TASK_STATUS_COMPLETED, 0)),
+        failed_count=int(status_counts_all.get(TASK_STATUS_FAILED, 0)),
+        canceled_count=int(status_counts_all.get(TASK_STATUS_CANCELED, 0)),
+        stale_running_count=stale_running_count,
+        avg_running_age_minutes=avg_running_age_minutes,
+    )
     return WriterTaskQueueResponse(
         total=len(items),
         status_group=status_group,
-        status_counts=status_counts,
+        status_counts=status_counts_all,
+        heartbeat_timeout_seconds=_WRITER_TASK_HEARTBEAT_TIMEOUT_SECONDS,
+        summary=summary,
+        failure_top=failure_top_items,
         items=items,
     )
 

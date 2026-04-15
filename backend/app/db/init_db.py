@@ -113,16 +113,26 @@ async def _ensure_schema_updates() -> None:
     async with engine.begin() as conn:
         def _upgrade(sync_conn):
             inspector = inspect(sync_conn)
-            columns = {col["name"] for col in inspector.get_columns("chapter_outlines")}
-            if "metadata" not in columns:
-                sync_conn.execute(text("ALTER TABLE chapter_outlines ADD COLUMN metadata JSON"))
+            table_names = set(inspector.get_table_names())
 
-            llm_columns = {col["name"] for col in inspector.get_columns("llm_call_logs")}
-            if "project_id" not in llm_columns:
-                sync_conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN project_id VARCHAR(64)"))
-            llm_indexes = {idx.get("name") for idx in inspector.get_indexes("llm_call_logs")}
-            if "idx_llm_call_logs_project_id" not in llm_indexes and "ix_llm_call_logs_project_id" not in llm_indexes:
-                sync_conn.execute(text("CREATE INDEX idx_llm_call_logs_project_id ON llm_call_logs(project_id)"))
+            if "chapter_outlines" in table_names:
+                columns = {col["name"] for col in inspector.get_columns("chapter_outlines")}
+                if "metadata" not in columns:
+                    sync_conn.execute(text("ALTER TABLE chapter_outlines ADD COLUMN metadata JSON"))
+
+            if "llm_call_logs" in table_names:
+                llm_columns = {col["name"] for col in inspector.get_columns("llm_call_logs")}
+                if "project_id" not in llm_columns:
+                    sync_conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN project_id VARCHAR(64)"))
+                llm_indexes = {idx.get("name") for idx in inspector.get_indexes("llm_call_logs")}
+                if "idx_llm_call_logs_project_id" not in llm_indexes and "ix_llm_call_logs_project_id" not in llm_indexes:
+                    sync_conn.execute(text("CREATE INDEX idx_llm_call_logs_project_id ON llm_call_logs(project_id)"))
+
+            if "generation_tasks" in table_names:
+                task_columns = {col["name"] for col in inspector.get_columns("generation_tasks")}
+                if "heartbeat_at" not in task_columns:
+                    sync_conn.execute(text("ALTER TABLE generation_tasks ADD COLUMN heartbeat_at DATETIME NULL"))
+                    sync_conn.execute(text("CREATE INDEX ix_generation_tasks_heartbeat_at ON generation_tasks(heartbeat_at)"))
         await conn.run_sync(_upgrade)
 
 

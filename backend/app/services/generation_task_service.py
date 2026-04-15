@@ -1,7 +1,7 @@
 # AIMETA P=任务服务_生成任务创建查询状态变更|R=章节任务_蓝图任务_取消重试恢复|NR=不含具体生成逻辑|E=GenerationTaskService|X=internal|A=服务类|D=sqlalchemy|S=db|RD=./README.ai
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, Optional
 from uuid import uuid4
 
@@ -55,6 +55,7 @@ class GenerationTaskService:
             max_retries=max(0, int(max_retries)),
             resume_from_task_id=resume_from_task_id,
             cancel_requested=False,
+            heartbeat_at=None,
         )
         self.session.add(task)
         await self.session.commit()
@@ -133,6 +134,7 @@ class GenerationTaskService:
         for task in rows:
             task.status = TASK_STATUS_QUEUED
             task.started_at = None
+            task.heartbeat_at = None
             task.finished_at = None
             task.cancel_requested = False
             task.stage_label = "恢复排队"
@@ -140,6 +142,54 @@ class GenerationTaskService:
             count += 1
         await self.session.commit()
         return count
+
+    async def recover_stale_running_tasks(
+        self,
+        *,
+        stale_seconds: int,
+        task_types: Optional[Iterable[str]] = None,
+        exclude_task_ids: Optional[Iterable[str]] = None,
+        limit: int = 300,
+    ) -> list[str]:
+        timeout = max(1, int(stale_seconds))
+        stmt = select(GenerationTask).where(GenerationTask.status == TASK_STATUS_RUNNING)
+        if task_types:
+            stmt = stmt.where(GenerationTask.task_type.in_(list(task_types)))
+        stmt = stmt.order_by(GenerationTask.updated_at.asc()).limit(max(1, min(limit, 3000)))
+
+        rows = (await self.session.execute(stmt)).scalars().all()
+        if not rows:
+            return []
+
+        excluded = set(exclude_task_ids or [])
+        now = datetime.now(timezone.utc)
+        stale_cutoff = now - timedelta(seconds=timeout)
+        recovered_ids: list[str] = []
+
+        for task in rows:
+            if task.id in excluded:
+                continue
+
+            heartbeat = task.heartbeat_at or task.updated_at or task.started_at or task.created_at
+            if heartbeat is None:
+                continue
+            if getattr(heartbeat, "tzinfo", None) is None:
+                heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+            if heartbeat > stale_cutoff:
+                continue
+
+            task.status = TASK_STATUS_QUEUED
+            task.started_at = None
+            task.heartbeat_at = None
+            task.finished_at = None
+            task.cancel_requested = False
+            task.stage_label = "恢复排队"
+            task.status_message = "检测到任务心跳超时，已自动恢复到队列"
+            recovered_ids.append(task.id)
+
+        if recovered_ids:
+            await self.session.commit()
+        return recovered_ids
 
     async def mark_running(
         self,
@@ -152,7 +202,9 @@ class GenerationTaskService:
         if not task or task.status != TASK_STATUS_QUEUED:
             return None
         task.status = TASK_STATUS_RUNNING
-        task.started_at = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        task.started_at = now
+        task.heartbeat_at = now
         task.finished_at = None
         task.cancel_requested = False
         if stage_label:
@@ -188,8 +240,19 @@ class GenerationTaskService:
             current = task.checkpoint if isinstance(task.checkpoint, dict) else {}
             current.update(checkpoint)
             task.checkpoint = current
+        task.heartbeat_at = datetime.now(timezone.utc)
         await self.session.commit()
         return task
+
+    async def touch_heartbeat(self, task_id: str, *, only_when_running: bool = True) -> bool:
+        task = await self.get_task(task_id)
+        if not task:
+            return False
+        if only_when_running and task.status != TASK_STATUS_RUNNING:
+            return False
+        task.heartbeat_at = datetime.now(timezone.utc)
+        await self.session.commit()
+        return True
 
     async def set_checkpoint(
         self,
@@ -220,7 +283,9 @@ class GenerationTaskService:
         task.status_message = status_message
         task.error_message = None
         task.result = result or {}
-        task.finished_at = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        task.finished_at = now
+        task.heartbeat_at = now
         await self.session.commit()
         return task
 
@@ -240,7 +305,9 @@ class GenerationTaskService:
         task.stage_label = stage_label
         task.status_message = status_message
         task.error_message = (error_message or "").strip()[:1000] or "任务失败"
-        task.finished_at = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        task.finished_at = now
+        task.heartbeat_at = now
         await self.session.commit()
         return task
 
@@ -261,7 +328,9 @@ class GenerationTaskService:
         task.status_message = status_message
         task.error_message = error_message
         task.cancel_requested = True
-        task.finished_at = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        task.finished_at = now
+        task.heartbeat_at = now
         await self.session.commit()
         return task
 

@@ -122,24 +122,52 @@ export interface LLMBudgetAlertResponse {
 }
 
 export interface WriterTaskQueueItem {
-  chapter_id: number
+  task_id: string
+  task_type: string
+  chapter_id?: number | null
   project_id: string
   project_title: string
-  chapter_number: number
+  chapter_number?: number | null
   status: string
   queue_state: 'active' | 'failed' | 'done' | 'other' | string
   owner_user_id: number
   owner_username?: string | null
+  progress_percent: number
+  stage_label?: string | null
+  status_message?: string | null
+  error_message?: string | null
+  retry_count: number
   word_count: number
   selected_version_id?: number | null
+  heartbeat_at?: string | null
+  heartbeat_age_seconds?: number | null
   updated_at: string
   age_minutes: number
+}
+
+export interface WriterTaskQueueSummary {
+  queued_count: number
+  running_count: number
+  completed_count: number
+  failed_count: number
+  canceled_count: number
+  stale_running_count: number
+  avg_running_age_minutes: number
+}
+
+export interface WriterTaskFailureTopItem {
+  error_key: string
+  sample_message: string
+  count: number
 }
 
 export interface WriterTaskQueueResponse {
   total: number
   status_group: 'active' | 'failed' | 'all' | string
   status_counts: Record<string, number>
+  heartbeat_timeout_seconds: number
+  summary: WriterTaskQueueSummary
+  failure_top: WriterTaskFailureTopItem[]
   items: WriterTaskQueueItem[]
 }
 

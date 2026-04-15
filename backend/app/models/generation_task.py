@@ -41,6 +41,7 @@ class GenerationTask(Base):
     resume_from_task_id: Mapped[Optional[str]] = mapped_column(String(40), index=True)
 
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at: Mapped[datetime] = mapped_column(

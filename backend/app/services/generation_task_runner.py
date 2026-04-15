@@ -32,13 +32,41 @@ class GenerationTaskRunner:
         except ValueError:
             worker_count = 1
         self._worker_count = max(1, min(worker_count, 4))
+        self._heartbeat_interval_seconds = self._parse_env_int(
+            "GENERATION_TASK_HEARTBEAT_INTERVAL_SECONDS",
+            default=10,
+            min_value=3,
+            max_value=180,
+        )
+        self._stale_timeout_seconds = self._parse_env_int(
+            "GENERATION_TASK_STALE_TIMEOUT_SECONDS",
+            default=300,
+            min_value=30,
+            max_value=3600,
+        )
+        self._stale_scan_interval_seconds = self._parse_env_int(
+            "GENERATION_TASK_STALE_SCAN_INTERVAL_SECONDS",
+            default=30,
+            min_value=10,
+            max_value=600,
+        )
 
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._queued_task_ids: set[str] = set()
         self._workers: list[asyncio.Task] = []
         self._running_handles: dict[str, asyncio.Task] = {}
+        self._stale_scan_handle: Optional[asyncio.Task] = None
         self._running = False
         self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _parse_env_int(name: str, *, default: int, min_value: int, max_value: int) -> int:
+        raw = os.getenv(name, str(default)).strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = default
+        return max(min_value, min(max_value, value))
 
     async def start(self) -> None:
         async with self._lock:
@@ -62,11 +90,18 @@ class GenerationTaskRunner:
                 worker = asyncio.create_task(self._worker_loop(idx), name=f"generation-task-worker-{idx}")
                 self._workers.append(worker)
 
+            self._stale_scan_handle = asyncio.create_task(
+                self._stale_recovery_loop(),
+                name="generation-task-stale-recovery",
+            )
+
             logger.info(
-                "GenerationTaskRunner started: workers=%s recovered=%s pending=%s",
+                "GenerationTaskRunner started: workers=%s recovered=%s pending=%s heartbeat=%ss stale_timeout=%ss",
                 self._worker_count,
                 recovered,
                 len(pending),
+                self._heartbeat_interval_seconds,
+                self._stale_timeout_seconds,
             )
 
     async def stop(self) -> None:
@@ -74,6 +109,11 @@ class GenerationTaskRunner:
             if not self._running:
                 return
             self._running = False
+
+            if self._stale_scan_handle:
+                self._stale_scan_handle.cancel()
+                await asyncio.gather(self._stale_scan_handle, return_exceptions=True)
+                self._stale_scan_handle = None
 
             for worker in self._workers:
                 worker.cancel()
@@ -148,6 +188,10 @@ class GenerationTaskRunner:
             user_id = task.user_id
             payload = task.payload if isinstance(task.payload, dict) else {}
 
+        heartbeat_handle = asyncio.create_task(
+            self._heartbeat_loop(task_id),
+            name=f"generation-task-heartbeat-{task_id}",
+        )
         try:
             if task_type == TASK_TYPE_CHAPTER_GENERATION:
                 if chapter_number is None:
@@ -175,6 +219,53 @@ class GenerationTaskRunner:
             raise
         except Exception as exc:  # noqa: BLE001
             await self._mark_task_failed(task_id, str(exc))
+        finally:
+            heartbeat_handle.cancel()
+            await asyncio.gather(heartbeat_handle, return_exceptions=True)
+
+    async def _heartbeat_loop(self, task_id: str) -> None:
+        while True:
+            try:
+                await asyncio.sleep(self._heartbeat_interval_seconds)
+                async with AsyncSessionLocal() as session:
+                    service = GenerationTaskService(session)
+                    alive = await service.touch_heartbeat(task_id, only_when_running=True)
+                if not alive:
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("任务心跳更新失败: task_id=%s error=%s", task_id, exc)
+
+    async def _stale_recovery_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(self._stale_scan_interval_seconds)
+                await self._recover_stale_running_tasks_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("任务卡死扫描失败: error=%s", exc)
+
+    async def _recover_stale_running_tasks_once(self) -> None:
+        running_ids = [task_id for task_id, handle in self._running_handles.items() if not handle.done()]
+        async with AsyncSessionLocal() as session:
+            service = GenerationTaskService(session)
+            recovered_ids = await service.recover_stale_running_tasks(
+                stale_seconds=self._stale_timeout_seconds,
+                task_types=[TASK_TYPE_CHAPTER_GENERATION, TASK_TYPE_BLUEPRINT_GENERATION],
+                exclude_task_ids=running_ids,
+                limit=200,
+            )
+        if not recovered_ids:
+            return
+        for task_id in recovered_ids:
+            self.enqueue(task_id)
+        logger.warning(
+            "检测到卡死任务并自动恢复: count=%s ids=%s",
+            len(recovered_ids),
+            ",".join(recovered_ids[:12]),
+        )
 
     async def _run_chapter_task(
         self,

@@ -130,17 +130,23 @@
                   <n-tag size="small" type="warning" bordered>
                     总任务 {{ queueVisibleTotal }}
                   </n-tag>
-                  <n-tag size="small" type="error" bordered>
-                    失败 {{ taskQueue?.status_counts?.failed ?? 0 }}
-                  </n-tag>
                   <n-tag size="small" type="info" bordered>
-                    生成中 {{ taskQueue?.status_counts?.generating ?? 0 }}
+                    排队 {{ taskQueue?.summary?.queued_count ?? 0 }}
+                  </n-tag>
+                  <n-tag size="small" type="warning" bordered>
+                    运行中 {{ taskQueue?.summary?.running_count ?? 0 }}
                   </n-tag>
                   <n-tag size="small" type="error" bordered>
-                    卡住 {{ queueVisibleStaleCount }}
+                    卡住 {{ taskQueue?.summary?.stale_running_count ?? 0 }}
+                  </n-tag>
+                  <n-tag size="small" type="error" bordered>
+                    失败 {{ taskQueue?.summary?.failed_count ?? 0 }}
                   </n-tag>
                   <n-tag size="small" type="default" bordered>
-                    评估中 {{ taskQueue?.status_counts?.evaluating ?? 0 }}
+                    已完成 {{ taskQueue?.summary?.completed_count ?? 0 }}
+                  </n-tag>
+                  <n-tag size="small" type="default" bordered>
+                    心跳阈值 {{ heartbeatTimeoutMinutes }} 分钟
                   </n-tag>
                 </div>
               </n-space>
@@ -232,6 +238,20 @@
             :bordered="false"
             size="small"
             :row-class-name="queueRowClassName"
+          />
+        </n-card>
+        <n-card :bordered="false" size="small" class="section-card">
+          <template #header>
+            <div class="section-title">失败原因 Top</div>
+          </template>
+          <n-empty v-if="!(taskQueue?.failure_top?.length)" description="暂无失败记录" />
+          <n-data-table
+            v-else
+            :columns="queueFailureColumns"
+            :data="taskQueue?.failure_top || []"
+            :pagination="{ pageSize: 8 }"
+            :bordered="false"
+            size="small"
           />
         </n-card>
         </div>
@@ -351,6 +371,7 @@ import {
   type LLMCallSummary,
   type LLMErrorTopItem,
   type LLMGroupedTrendResponse,
+  type WriterTaskFailureTopItem,
   type WriterTaskQueueItem,
   type WriterTaskQueueResponse
 } from '@/api/admin'
@@ -478,15 +499,39 @@ const queueStateLabel = (state: string) => {
   return '其他'
 }
 
+const taskTypeLabel = (taskType: string) => {
+  if (taskType === 'chapter_generation') return '章节生成'
+  if (taskType === 'blueprint_generation') return '蓝图生成'
+  return taskType
+}
+
+const formatHeartbeatAge = (seconds?: number | null) => {
+  if (seconds == null) return '--'
+  const total = Math.max(0, Number(seconds))
+  if (!Number.isFinite(total)) return '--'
+  if (total < 60) return `${Math.floor(total)}s`
+  return `${Math.floor(total / 60)}m`
+}
+
 const normalizedStaleThreshold = computed(() => {
   const value = Number(staleThresholdMinutes.value || 0)
   if (!Number.isFinite(value) || value < 1) return 1
   return Math.trunc(value)
 })
 
-const isQueueStale = (row: WriterTaskQueueItem) => (
-  row.queue_state === 'active' && row.age_minutes >= normalizedStaleThreshold.value
-)
+const heartbeatTimeoutMinutes = computed(() => {
+  const seconds = Number(taskQueue.value?.heartbeat_timeout_seconds || 0)
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0
+  return Math.max(1, Math.ceil(seconds / 60))
+})
+
+const normalizedStaleThresholdSeconds = computed(() => normalizedStaleThreshold.value * 60)
+
+const isQueueStale = (row: WriterTaskQueueItem) => {
+  if (row.status !== 'running') return false
+  const heartbeatAgeSeconds = Number(row.heartbeat_age_seconds || 0)
+  return heartbeatAgeSeconds >= normalizedStaleThresholdSeconds.value
+}
 
 const queueRows = computed<WriterTaskQueueItem[]>(() => {
   let rows = taskQueue.value?.items || []
@@ -500,13 +545,23 @@ const queueRows = computed<WriterTaskQueueItem[]>(() => {
 })
 
 const queueVisibleTotal = computed(() => queueRows.value.length)
-const queueVisibleStaleCount = computed(() => queueRows.value.filter((item) => isQueueStale(item)).length)
 
-const canRetryQueueRow = (row: WriterTaskQueueItem) => row.queue_state === 'failed'
+const canRetryQueueRow = (row: WriterTaskQueueItem) => (
+  row.queue_state === 'failed'
+  && row.task_type === 'chapter_generation'
+  && row.chapter_id != null
+)
 
-const isRetryingChapter = (chapterId: number) => Boolean(retryingChapterMap.value[chapterId])
+const isRetryingChapter = (chapterId?: number | null) => {
+  if (chapterId == null) return false
+  return Boolean(retryingChapterMap.value[chapterId])
+}
 
 const jumpToTaskChapter = (row: WriterTaskQueueItem) => {
+  if (row.chapter_number == null) {
+    showAlert('蓝图任务暂无章节定位', 'info')
+    return
+  }
   router.push({
     name: 'admin-novel-detail',
     params: { id: row.project_id },
@@ -521,17 +576,18 @@ const queueRowClassName = (row: WriterTaskQueueItem) => (isQueueStale(row) ? 'qu
 
 const retryQueueTask = async (row: WriterTaskQueueItem) => {
   if (!canRetryQueueRow(row)) {
-    showAlert('仅失败任务支持直接重试', 'info')
+    showAlert('仅失败的章节生成任务支持直接重试', 'info')
     return
   }
-  if (isRetryingChapter(row.chapter_id)) {
+  const chapterId = Number(row.chapter_id)
+  if (isRetryingChapter(chapterId)) {
     return
   }
 
-  retryingChapterMap.value = { ...retryingChapterMap.value, [row.chapter_id]: true }
+  retryingChapterMap.value = { ...retryingChapterMap.value, [chapterId]: true }
   try {
     const result = await AdminAPI.retryWriterTask({
-      chapter_id: row.chapter_id,
+      chapter_id: chapterId,
       retry_mode: 'auto'
     })
     showAlert(result.message || '重试任务已投递', 'success')
@@ -540,7 +596,7 @@ const retryQueueTask = async (row: WriterTaskQueueItem) => {
     showAlert(err instanceof Error ? err.message : '重试任务投递失败', 'error')
   } finally {
     const nextMap = { ...retryingChapterMap.value }
-    delete nextMap[row.chapter_id]
+    delete nextMap[chapterId]
     retryingChapterMap.value = nextMap
   }
 }
@@ -908,6 +964,12 @@ const queueColumns: DataTableColumns<WriterTaskQueueItem> = [
       )
   },
   {
+    title: '任务类型',
+    key: 'task_type',
+    width: 110,
+    render: (row) => taskTypeLabel(row.task_type)
+  },
+  {
     title: '流程状态',
     key: 'status',
     width: 120
@@ -921,8 +983,22 @@ const queueColumns: DataTableColumns<WriterTaskQueueItem> = [
   {
     title: '章节',
     key: 'chapter_number',
-    width: 84,
-    render: (row) => `第${row.chapter_number}章`
+    width: 90,
+    render: (row) => (row.chapter_number == null ? '-' : `第${row.chapter_number}章`)
+  },
+  {
+    title: '阶段',
+    key: 'stage_label',
+    width: 120,
+    ellipsis: { tooltip: true },
+    render: (row) => row.stage_label || '-'
+  },
+  {
+    title: '进度',
+    key: 'progress_percent',
+    width: 88,
+    align: 'center',
+    render: (row) => `${row.progress_percent}%`
   },
   {
     title: '用户',
@@ -931,28 +1007,30 @@ const queueColumns: DataTableColumns<WriterTaskQueueItem> = [
     render: (row) => row.owner_username || row.owner_user_id
   },
   {
-    title: '超时',
-    key: 'stale',
-    width: 76,
+    title: '心跳',
+    key: 'heartbeat_age_seconds',
+    width: 96,
     align: 'center',
     render: (row) =>
-      isQueueStale(row)
-        ? h(
-            NTag,
-            { type: 'error', bordered: false, size: 'small' },
-            { default: () => '卡住' }
-          )
-        : '-'
+      row.status !== 'running'
+        ? '-'
+        : isQueueStale(row)
+          ? h(
+              NTag,
+              { type: 'error', bordered: false, size: 'small' },
+              { default: () => `卡住 ${formatHeartbeatAge(row.heartbeat_age_seconds)}` }
+            )
+          : formatHeartbeatAge(row.heartbeat_age_seconds)
   },
   {
-    title: '卡住(分钟)',
+    title: '运行(分钟)',
     key: 'age_minutes',
     width: 100
   },
   {
     title: '更新时间',
     key: 'updated_at',
-    width: 170,
+    width: 168,
     render: (row) => formatDateTime(row.updated_at)
   },
   {
@@ -972,6 +1050,7 @@ const queueColumns: DataTableColumns<WriterTaskQueueItem> = [
                 size: 'tiny',
                 tertiary: true,
                 type: 'primary',
+                disabled: row.chapter_number == null,
                 onClick: () => jumpToTaskChapter(row)
               },
               { default: () => '定位' }
@@ -991,6 +1070,27 @@ const queueColumns: DataTableColumns<WriterTaskQueueItem> = [
           ]
         }
       )
+  }
+]
+
+const queueFailureColumns: DataTableColumns<WriterTaskFailureTopItem> = [
+  {
+    title: '次数',
+    key: 'count',
+    width: 72,
+    align: 'center'
+  },
+  {
+    title: '错误摘要',
+    key: 'error_key',
+    width: 260,
+    ellipsis: { tooltip: true }
+  },
+  {
+    title: '示例信息',
+    key: 'sample_message',
+    minWidth: 320,
+    ellipsis: { tooltip: true }
   }
 ]
 

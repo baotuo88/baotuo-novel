@@ -126,24 +126,52 @@ class LLMBudgetAlertResponse(BaseModel):
 
 
 class WriterTaskQueueItem(BaseModel):
-    chapter_id: int
+    task_id: str
+    task_type: str
+    chapter_id: Optional[int] = None
     project_id: str
     project_title: str
-    chapter_number: int
+    chapter_number: Optional[int] = None
     status: str
     queue_state: str
     owner_user_id: int
     owner_username: Optional[str] = None
-    word_count: int
+    progress_percent: int
+    stage_label: Optional[str] = None
+    status_message: Optional[str] = None
+    error_message: Optional[str] = None
+    retry_count: int
+    word_count: int = 0
     selected_version_id: Optional[int] = None
+    heartbeat_at: Optional[datetime] = None
+    heartbeat_age_seconds: Optional[int] = None
     updated_at: datetime
     age_minutes: int
+
+
+class WriterTaskQueueSummary(BaseModel):
+    queued_count: int
+    running_count: int
+    completed_count: int
+    failed_count: int
+    canceled_count: int
+    stale_running_count: int
+    avg_running_age_minutes: float
+
+
+class WriterTaskFailureTopItem(BaseModel):
+    error_key: str
+    sample_message: str
+    count: int
 
 
 class WriterTaskQueueResponse(BaseModel):
     total: int
     status_group: str
     status_counts: dict[str, int]
+    heartbeat_timeout_seconds: int
+    summary: WriterTaskQueueSummary
+    failure_top: list[WriterTaskFailureTopItem]
     items: list[WriterTaskQueueItem]
 
 
