@@ -179,6 +179,12 @@ export interface WriterTaskCenterResponse {
   items: WriterTaskCenterItem[]
 }
 
+export interface WriterTaskStreamQuery {
+  limit?: number
+  status_group?: 'active' | 'failed' | 'all'
+  interval_seconds?: number
+}
+
 export interface WriterTaskRetryPayload {
   writing_notes?: string
   force?: boolean
@@ -505,6 +511,18 @@ export class NovelAPI {
     if (query.status_group) params.set('status_group', query.status_group)
     const queryString = params.toString()
     return request(`${WRITER_BASE}/${projectId}/tasks${queryString ? `?${queryString}` : ''}`)
+  }
+
+  static getWriterTaskCenterStreamUrl(
+    projectId: string,
+    query: WriterTaskStreamQuery = {}
+  ): string {
+    const params = new URLSearchParams()
+    if (query.limit != null) params.set('limit', String(query.limit))
+    if (query.status_group) params.set('status_group', query.status_group)
+    if (query.interval_seconds != null) params.set('interval_seconds', String(query.interval_seconds))
+    const queryString = params.toString()
+    return `${API_BASE_URL}${WRITER_BASE}/${projectId}/tasks/stream${queryString ? `?${queryString}` : ''}`
   }
 
   static async cancelWriterTask(

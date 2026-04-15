@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import select, update
 
@@ -50,11 +50,42 @@ class GenerationTaskRunner:
             min_value=10,
             max_value=600,
         )
+        self._chapter_timeout_seconds = self._parse_env_int(
+            "GENERATION_TASK_CHAPTER_TIMEOUT_SECONDS",
+            default=1800,
+            min_value=120,
+            max_value=6 * 3600,
+        )
+        self._blueprint_timeout_seconds = self._parse_env_int(
+            "GENERATION_TASK_BLUEPRINT_TIMEOUT_SECONDS",
+            default=1200,
+            min_value=120,
+            max_value=6 * 3600,
+        )
+        self._default_max_retries = self._parse_env_int(
+            "GENERATION_TASK_AUTO_RETRY_MAX",
+            default=1,
+            min_value=0,
+            max_value=6,
+        )
+        self._retry_backoff_base_seconds = self._parse_env_int(
+            "GENERATION_TASK_RETRY_BACKOFF_BASE_SECONDS",
+            default=8,
+            min_value=1,
+            max_value=300,
+        )
+        self._retry_backoff_max_seconds = self._parse_env_int(
+            "GENERATION_TASK_RETRY_BACKOFF_MAX_SECONDS",
+            default=180,
+            min_value=1,
+            max_value=3600,
+        )
 
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._queued_task_ids: set[str] = set()
         self._workers: list[asyncio.Task] = []
         self._running_handles: dict[str, asyncio.Task] = {}
+        self._delayed_enqueue_handles: set[asyncio.Task] = set()
         self._stale_scan_handle: Optional[asyncio.Task] = None
         self._running = False
         self._lock = asyncio.Lock()
@@ -96,12 +127,15 @@ class GenerationTaskRunner:
             )
 
             logger.info(
-                "GenerationTaskRunner started: workers=%s recovered=%s pending=%s heartbeat=%ss stale_timeout=%ss",
+                "GenerationTaskRunner started: workers=%s recovered=%s pending=%s heartbeat=%ss stale_timeout=%ss chapter_timeout=%ss blueprint_timeout=%ss auto_retry_max=%s",
                 self._worker_count,
                 recovered,
                 len(pending),
                 self._heartbeat_interval_seconds,
                 self._stale_timeout_seconds,
+                self._chapter_timeout_seconds,
+                self._blueprint_timeout_seconds,
+                self._default_max_retries,
             )
 
     async def stop(self) -> None:
@@ -125,6 +159,12 @@ class GenerationTaskRunner:
                 handle.cancel()
             await asyncio.gather(*running, return_exceptions=True)
             self._running_handles.clear()
+
+            delayed = list(self._delayed_enqueue_handles)
+            for handle in delayed:
+                handle.cancel()
+            await asyncio.gather(*delayed, return_exceptions=True)
+            self._delayed_enqueue_handles.clear()
             self._queued_task_ids.clear()
 
             while not self._queue.empty():
@@ -153,6 +193,36 @@ class GenerationTaskRunner:
     def is_running_task(self, task_id: str) -> bool:
         handle = self._running_handles.get(task_id)
         return bool(handle and not handle.done())
+
+    def _task_timeout_seconds(self, task_type: str) -> int:
+        if task_type == TASK_TYPE_CHAPTER_GENERATION:
+            return self._chapter_timeout_seconds
+        if task_type == TASK_TYPE_BLUEPRINT_GENERATION:
+            return self._blueprint_timeout_seconds
+        return self._chapter_timeout_seconds
+
+    def _retry_backoff_seconds(self, current_retry_count: int) -> int:
+        multiplier = 2 ** max(0, int(current_retry_count))
+        return max(
+            1,
+            min(
+                self._retry_backoff_max_seconds,
+                self._retry_backoff_base_seconds * multiplier,
+            ),
+        )
+
+    def _schedule_delayed_enqueue(self, task_id: str, delay_seconds: int) -> None:
+        async def _enqueue_later() -> None:
+            try:
+                await asyncio.sleep(max(0, int(delay_seconds)))
+                self.enqueue(task_id)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                self._delayed_enqueue_handles.discard(handle)
+
+        handle = asyncio.create_task(_enqueue_later(), name=f"generation-task-retry-enqueue-{task_id}")
+        self._delayed_enqueue_handles.add(handle)
 
     async def _worker_loop(self, worker_index: int) -> None:
         while True:
@@ -187,6 +257,7 @@ class GenerationTaskRunner:
             chapter_number = task.chapter_number
             user_id = task.user_id
             payload = task.payload if isinstance(task.payload, dict) else {}
+            timeout_seconds = self._task_timeout_seconds(task_type)
 
         heartbeat_handle = asyncio.create_task(
             self._heartbeat_loop(task_id),
@@ -196,29 +267,50 @@ class GenerationTaskRunner:
             if task_type == TASK_TYPE_CHAPTER_GENERATION:
                 if chapter_number is None:
                     raise ValueError("章节任务缺少 chapter_number")
-                await self._run_chapter_task(
-                    task_id=task_id,
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    user_id=user_id,
-                    payload=payload,
+                await asyncio.wait_for(
+                    self._run_chapter_task(
+                        task_id=task_id,
+                        project_id=project_id,
+                        chapter_number=chapter_number,
+                        user_id=user_id,
+                        payload=payload,
+                    ),
+                    timeout=timeout_seconds,
                 )
                 return
 
             if task_type == TASK_TYPE_BLUEPRINT_GENERATION:
-                await self._run_blueprint_task(
-                    task_id=task_id,
-                    project_id=project_id,
-                    user_id=user_id,
+                await asyncio.wait_for(
+                    self._run_blueprint_task(
+                        task_id=task_id,
+                        project_id=project_id,
+                        user_id=user_id,
+                    ),
+                    timeout=timeout_seconds,
                 )
                 return
 
-            await self._mark_task_failed(task_id, f"未知任务类型: {task_type}")
+            await self._mark_task_failed(
+                task_id,
+                f"未知任务类型: {task_type}",
+                stage_label="执行失败",
+                status_message="任务执行失败，可重试",
+            )
         except asyncio.CancelledError:
             await self._mark_task_canceled(task_id)
             raise
+        except asyncio.TimeoutError:
+            await self._handle_task_failure(
+                task_id,
+                error_message=f"任务执行超时（>{timeout_seconds}s）",
+                stage_label="执行超时",
+            )
         except Exception as exc:  # noqa: BLE001
-            await self._mark_task_failed(task_id, str(exc))
+            await self._handle_task_failure(
+                task_id,
+                error_message=str(exc),
+                stage_label="执行失败",
+            )
         finally:
             heartbeat_handle.cancel()
             await asyncio.gather(heartbeat_handle, return_exceptions=True)
@@ -265,6 +357,87 @@ class GenerationTaskRunner:
             "检测到卡死任务并自动恢复: count=%s ids=%s",
             len(recovered_ids),
             ",".join(recovered_ids[:12]),
+        )
+
+    async def _prepare_auto_retry(
+        self,
+        task_id: str,
+    ) -> Optional[Tuple[str, int, int, int]]:
+        async with AsyncSessionLocal() as session:
+            service = GenerationTaskService(session)
+            task = await service.get_task(task_id)
+            if not task:
+                return None
+            if task.task_type not in {TASK_TYPE_CHAPTER_GENERATION, TASK_TYPE_BLUEPRINT_GENERATION}:
+                return None
+            if task.status == TASK_STATUS_CANCELED:
+                return None
+
+            current_retry_count = max(0, int(task.retry_count or 0))
+            max_retries = max(0, int(task.max_retries or self._default_max_retries))
+            if current_retry_count >= max_retries:
+                return None
+
+            payload = dict(task.payload or {}) if isinstance(task.payload, dict) else {}
+            if task.task_type == TASK_TYPE_CHAPTER_GENERATION:
+                checkpoint = task.checkpoint if isinstance(task.checkpoint, dict) else {}
+                variants = checkpoint.get("generated_variants")
+                if isinstance(variants, list):
+                    resume_variants = [item for item in variants if isinstance(item, dict)]
+                    if resume_variants:
+                        payload["resume_variants"] = resume_variants
+
+            next_retry_count = current_retry_count + 1
+            backoff_seconds = self._retry_backoff_seconds(current_retry_count)
+            retry_task = await service.create_task(
+                task_type=task.task_type,
+                project_id=task.project_id,
+                user_id=int(task.user_id),
+                chapter_number=task.chapter_number,
+                payload=payload,
+                retry_count=next_retry_count,
+                max_retries=max_retries,
+                resume_from_task_id=task.id,
+                stage_label="自动重试排队",
+                status_message=f"任务失败后自动重试（第{next_retry_count}/{max_retries}次），等待执行",
+            )
+            return retry_task.id, backoff_seconds, next_retry_count, max_retries
+
+    async def _handle_task_failure(
+        self,
+        task_id: str,
+        *,
+        error_message: str,
+        stage_label: str = "执行失败",
+    ) -> None:
+        retry_plan = await self._prepare_auto_retry(task_id)
+        if retry_plan:
+            retry_task_id, backoff_seconds, retry_attempt, retry_max = retry_plan
+            await self._mark_task_failed(
+                task_id,
+                (error_message or "任务执行失败"),
+                stage_label=stage_label,
+                status_message=(
+                    f"任务失败，已自动安排重试（第{retry_attempt}/{retry_max}次），"
+                    f"约 {backoff_seconds}s 后重试"
+                ),
+            )
+            self._schedule_delayed_enqueue(retry_task_id, backoff_seconds)
+            logger.warning(
+                "任务失败自动重试已安排: source_task=%s retry_task=%s attempt=%s/%s backoff=%ss",
+                task_id,
+                retry_task_id,
+                retry_attempt,
+                retry_max,
+                backoff_seconds,
+            )
+            return
+
+        await self._mark_task_failed(
+            task_id,
+            (error_message or "任务执行失败"),
+            stage_label=stage_label,
+            status_message="任务执行失败，可重试",
         )
 
     async def _run_chapter_task(
@@ -440,7 +613,14 @@ class GenerationTaskRunner:
                 status_message=status_message,
             )
 
-    async def _mark_task_failed(self, task_id: str, error_message: str) -> None:
+    async def _mark_task_failed(
+        self,
+        task_id: str,
+        error_message: str,
+        *,
+        stage_label: str = "执行失败",
+        status_message: str = "任务执行失败，可重试",
+    ) -> None:
         async with AsyncSessionLocal() as session:
             task_service = GenerationTaskService(session)
             task = await task_service.get_task(task_id)
@@ -466,8 +646,8 @@ class GenerationTaskRunner:
             await task_service.fail_task(
                 task_id,
                 error_message=(error_message or "任务执行失败"),
-                stage_label="执行失败",
-                status_message="任务执行失败，可重试",
+                stage_label=stage_label,
+                status_message=status_message,
             )
 
     async def _mark_task_canceled(self, task_id: str) -> None:

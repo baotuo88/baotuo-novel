@@ -39,6 +39,8 @@ class GenerationTaskService:
         retry_count: int = 0,
         max_retries: int = 0,
         resume_from_task_id: Optional[str] = None,
+        stage_label: Optional[str] = None,
+        status_message: Optional[str] = None,
     ) -> GenerationTask:
         task = GenerationTask(
             id=uuid4().hex,
@@ -48,8 +50,8 @@ class GenerationTaskService:
             user_id=user_id,
             status=TASK_STATUS_QUEUED,
             progress_percent=0,
-            stage_label="排队中",
-            status_message="任务已加入队列，等待执行",
+            stage_label=(stage_label or "排队中"),
+            status_message=(status_message or "任务已加入队列，等待执行"),
             payload=payload or {},
             retry_count=max(0, int(retry_count)),
             max_retries=max(0, int(max_retries)),

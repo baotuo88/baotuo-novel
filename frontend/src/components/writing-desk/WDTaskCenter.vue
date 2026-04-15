@@ -31,6 +31,10 @@
             <span class="task-stat-label">完成</span>
             <span class="task-stat-value">{{ queue.done_count }}</span>
           </div>
+          <div class="task-stat">
+            <span class="task-stat-label">同步</span>
+            <span class="task-stat-value">{{ streamConnected ? '实时' : '轮询' }}</span>
+          </div>
 
           <div class="task-filter-group">
             <label class="md-text-field-label">筛选</label>
@@ -109,6 +113,7 @@
 import { onUnmounted, reactive, ref, watch } from 'vue'
 import { NovelAPI, type WriterTaskCenterItem, type WriterTaskCenterResponse } from '@/api/novel'
 import { globalAlert } from '@/composables/useAlert'
+import { useAuthStore } from '@/stores/auth'
 
 interface Props {
   show: boolean
@@ -127,6 +132,8 @@ const emit = defineEmits<{
 const loading = ref(false)
 const statusGroup = ref<'all' | 'active' | 'failed'>('all')
 const actionLoading = reactive<Record<string, boolean>>({})
+const streamConnected = ref(false)
+const streamFallbackMode = ref(false)
 const queue = ref<WriterTaskCenterResponse>({
   total: 0,
   active_count: 0,
@@ -135,6 +142,8 @@ const queue = ref<WriterTaskCenterResponse>({
   items: []
 })
 let timer: number | null = null
+let reconnectTimer: number | null = null
+let streamAbortController: AbortController | null = null
 
 const queueStateLabel = (state: string) => {
   if (state === 'active') return '进行中'
@@ -142,6 +151,10 @@ const queueStateLabel = (state: string) => {
   if (state === 'done') return '已完成'
   return '其他'
 }
+
+const authStore = useAuthStore()
+
+const shouldKeepStreaming = () => Boolean(props.show && props.projectId)
 
 const stopAutoRefresh = () => {
   if (timer) {
@@ -151,10 +164,131 @@ const stopAutoRefresh = () => {
 }
 
 const startAutoRefresh = () => {
+  if (!streamFallbackMode.value) return
   stopAutoRefresh()
   timer = window.setInterval(() => {
     void fetchTasks()
   }, 6000)
+}
+
+const stopReconnect = () => {
+  if (reconnectTimer) {
+    window.clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+}
+
+const stopTaskStream = () => {
+  stopReconnect()
+  if (streamAbortController) {
+    streamAbortController.abort()
+    streamAbortController = null
+  }
+  streamConnected.value = false
+}
+
+const scheduleReconnect = () => {
+  if (!shouldKeepStreaming()) return
+  stopReconnect()
+  reconnectTimer = window.setTimeout(() => {
+    void startTaskStream()
+  }, 2500)
+}
+
+const processSseEvent = (block: string) => {
+  const lines = block.split('\n')
+  let eventName = 'message'
+  const dataLines: string[] = []
+  for (const line of lines) {
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim()
+      continue
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trim())
+    }
+  }
+  if (eventName !== 'snapshot' || !dataLines.length) {
+    return
+  }
+  try {
+    const payload = JSON.parse(dataLines.join('\n')) as WriterTaskCenterResponse
+    queue.value = payload
+    loading.value = false
+  } catch (error) {
+    console.warn('解析任务中心 SSE 数据失败:', error)
+  }
+}
+
+const startTaskStream = async () => {
+  if (!props.projectId) return
+  stopTaskStream()
+
+  if (!authStore.token) {
+    streamFallbackMode.value = true
+    startAutoRefresh()
+    return
+  }
+
+  loading.value = true
+  const controller = new AbortController()
+  streamAbortController = controller
+
+  try {
+    const streamUrl = NovelAPI.getWriterTaskCenterStreamUrl(props.projectId, {
+      limit: 120,
+      status_group: statusGroup.value,
+      interval_seconds: 3,
+    })
+    const response = await fetch(streamUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${authStore.token}`,
+        Accept: 'text/event-stream',
+      },
+      signal: controller.signal,
+    })
+    if (!response.ok || !response.body) {
+      throw new Error(`任务流连接失败，状态码: ${response.status}`)
+    }
+
+    streamConnected.value = true
+    streamFallbackMode.value = false
+    stopAutoRefresh()
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (shouldKeepStreaming()) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let delimiterIndex = buffer.indexOf('\n\n')
+      while (delimiterIndex >= 0) {
+        const rawEvent = buffer.slice(0, delimiterIndex).trim()
+        buffer = buffer.slice(delimiterIndex + 2)
+        if (rawEvent) {
+          processSseEvent(rawEvent)
+        }
+        delimiterIndex = buffer.indexOf('\n\n')
+      }
+    }
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      console.warn('任务中心 SSE 中断，回退轮询:', error)
+      streamFallbackMode.value = true
+      startAutoRefresh()
+      scheduleReconnect()
+    }
+  } finally {
+    const isCurrentController = streamAbortController === controller
+    if (isCurrentController) {
+      streamAbortController = null
+      streamConnected.value = false
+      loading.value = false
+    }
+  }
 }
 
 const fetchTasks = async () => {
@@ -215,8 +349,9 @@ watch(
   (show) => {
     if (show) {
       void fetchTasks()
-      startAutoRefresh()
+      void startTaskStream()
     } else {
+      stopTaskStream()
       stopAutoRefresh()
     }
   }
@@ -227,6 +362,7 @@ watch(
   () => {
     if (!props.show) return
     void fetchTasks()
+    void startTaskStream()
   }
 )
 
@@ -235,10 +371,12 @@ watch(
   () => {
     if (!props.show) return
     void fetchTasks()
+    void startTaskStream()
   }
 )
 
 onUnmounted(() => {
+  stopTaskStream()
   stopAutoRefresh()
 })
 </script>

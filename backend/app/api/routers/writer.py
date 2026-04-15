@@ -19,7 +19,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -584,20 +585,20 @@ async def finalize_chapter(
     )
 
 
-@router.get("/novels/{project_id}/tasks", response_model=WriterTaskCenterResponse)
-async def get_writer_task_center(
+async def _build_writer_task_center_response(
+    *,
     project_id: str,
-    limit: int = 80,
-    status_group: Literal["active", "failed", "all"] = "all",
-    session: AsyncSession = Depends(get_session),
-    current_user: UserInDB = Depends(get_current_user),
+    user_id: int,
+    limit: int,
+    status_group: Literal["active", "failed", "all"],
+    session: AsyncSession,
 ) -> WriterTaskCenterResponse:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit 必须在 1~500 之间")
 
     novel_service = NovelService(session)
     task_service = GenerationTaskService(session)
-    await novel_service.ensure_project_owner(project_id, current_user.id)
+    await novel_service.ensure_project_owner(project_id, user_id)
 
     stmt = (
         select(Chapter)
@@ -641,7 +642,7 @@ async def get_writer_task_center(
             task_id = latest_task.id
             can_cancel = bool(
                 latest_task.status in ACTIVE_TASK_STATUSES
-                and int(latest_task.user_id) == int(current_user.id)
+                and int(latest_task.user_id) == int(user_id)
             )
             can_retry = bool(latest_task.status in FAILED_TASK_STATUSES)
             error_message = latest_task.error_message if latest_task.status in FAILED_TASK_STATUSES else None
@@ -708,6 +709,76 @@ async def get_writer_task_center(
         failed_count=failed_count,
         done_count=done_count,
         items=items,
+    )
+
+
+@router.get("/novels/{project_id}/tasks", response_model=WriterTaskCenterResponse)
+async def get_writer_task_center(
+    project_id: str,
+    limit: int = 80,
+    status_group: Literal["active", "failed", "all"] = "all",
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> WriterTaskCenterResponse:
+    return await _build_writer_task_center_response(
+        project_id=project_id,
+        user_id=int(current_user.id),
+        limit=limit,
+        status_group=status_group,
+        session=session,
+    )
+
+
+@router.get("/novels/{project_id}/tasks/stream")
+async def stream_writer_task_center(
+    project_id: str,
+    request: Request,
+    limit: int = 120,
+    status_group: Literal["active", "failed", "all"] = "all",
+    interval_seconds: int = 3,
+    current_user: UserInDB = Depends(get_current_user),
+) -> StreamingResponse:
+    if interval_seconds < 1 or interval_seconds > 15:
+        raise HTTPException(status_code=400, detail="interval_seconds 必须在 1~15 之间")
+
+    async def _event_stream():
+        last_snapshot = ""
+        while True:
+            if await request.is_disconnected():
+                break
+
+            try:
+                async with AsyncSessionLocal() as stream_session:
+                    snapshot = await _build_writer_task_center_response(
+                        project_id=project_id,
+                        user_id=int(current_user.id),
+                        limit=limit,
+                        status_group=status_group,
+                        session=stream_session,
+                    )
+                serialized = json.dumps(snapshot.model_dump(mode="json"), ensure_ascii=False)
+                if serialized != last_snapshot:
+                    last_snapshot = serialized
+                    yield f"event: snapshot\ndata: {serialized}\n\n"
+                else:
+                    yield "event: ping\ndata: {}\n\n"
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("任务中心 SSE 推送失败: project=%s error=%s", project_id, exc)
+                payload = json.dumps({"message": str(exc)[:200]}, ensure_ascii=False)
+                yield f"event: error\ndata: {payload}\n\n"
+
+            await asyncio.sleep(interval_seconds)
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
