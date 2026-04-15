@@ -149,7 +149,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useNovelStore } from '@/stores/novel'
 import { NovelAPI } from '@/api/novel'
@@ -197,6 +197,7 @@ const writingPresets = ref<WritingPresetItem[]>([])
 const selectedPresetId = ref('')
 const presetLoading = ref(false)
 const presetApplying = ref(false)
+let chapterStatusTimer: number | null = null
 
 // 计算属性
 const project = computed(() => novelStore.currentProject)
@@ -244,6 +245,12 @@ const totalChapters = computed(() => {
 
 const completedChapters = computed(() => {
   return project.value?.chapters?.filter(ch => ch.content)?.length || 0
+})
+
+const hasActiveWriterTask = computed(() => {
+  return (project.value?.chapters || []).some((chapter) =>
+    ['generating', 'evaluating', 'selecting'].includes(chapter.generation_status)
+  )
 })
 
 const isCurrentVersion = (versionIndex: number) => {
@@ -438,9 +445,15 @@ const closeSidebar = () => {
   sidebarOpen.value = false
 }
 
+const syncGenerationIndicators = () => {
+  const generating = (project.value?.chapters || []).find((ch) => ch.generation_status === 'generating')
+  generatingChapter.value = generating ? generating.chapter_number : null
+}
+
 const loadProject = async () => {
   try {
     await novelStore.loadProject(props.id)
+    syncGenerationIndicators()
   } catch (error) {
     console.error('加载项目失败:', error)
   }
@@ -452,11 +465,38 @@ const fetchChapterStatus = async () => {
   }
   try {
     await novelStore.loadChapter(selectedChapterNumber.value)
+    syncGenerationIndicators()
     console.log('Chapter status polled and updated.')
   } catch (error) {
     console.error('轮询章节状态失败:', error)
     // 在这里可以决定是否要通知用户轮询失败
   }
+}
+
+const stopChapterStatusPolling = () => {
+  if (chapterStatusTimer != null) {
+    window.clearInterval(chapterStatusTimer)
+    chapterStatusTimer = null
+  }
+}
+
+const pollProjectStatus = async () => {
+  try {
+    await novelStore.loadProject(props.id, true)
+    if (selectedChapterNumber.value !== null) {
+      await novelStore.loadChapter(selectedChapterNumber.value)
+    }
+    syncGenerationIndicators()
+  } catch (error) {
+    console.error('轮询项目状态失败:', error)
+  }
+}
+
+const startChapterStatusPolling = () => {
+  stopChapterStatusPolling()
+  chapterStatusTimer = window.setInterval(() => {
+    void pollProjectStatus()
+  }, 5000)
 }
 
 
@@ -517,6 +557,7 @@ const generateChapter = async (chapterNumber: number) => {
     }
 
     await novelStore.generateChapter(chapterNumber)
+    syncGenerationIndicators()
     
     // store 中的 project 已经被更新，所以我们不需要手动修改本地状态
     // chapterGenerationResult 也不再需要，因为 availableVersions 会从更新后的 project.chapters 中获取数据
@@ -536,7 +577,7 @@ const generateChapter = async (chapterNumber: number) => {
 
     globalAlert.showError(`生成章节失败: ${error instanceof Error ? error.message : '未知错误'}`, '生成失败')
   } finally {
-    generatingChapter.value = null
+    syncGenerationIndicators()
   }
 }
 
@@ -716,6 +757,7 @@ const handleTaskUpdated = async (chapterNumber?: number) => {
     if (chapterNumber != null) {
       await novelStore.loadChapter(chapterNumber)
     }
+    syncGenerationIndicators()
   } catch (error) {
     console.error('任务状态刷新失败:', error)
   }
@@ -727,7 +769,20 @@ onMounted(() => {
   loadWritingPresets()
 })
 
+watch(
+  () => hasActiveWriterTask.value,
+  (active) => {
+    if (active) {
+      startChapterStatusPolling()
+    } else {
+      stopChapterStatusPolling()
+    }
+  },
+  { immediate: true }
+)
+
 onUnmounted(() => {
+  stopChapterStatusPolling()
   document.body.classList.remove('m3-novel')
 })
 </script>

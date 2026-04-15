@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .core.config import settings
 from .db.init_db import init_db
 from .services.prompt_service import PromptService
+from .services.generation_task_runner import generation_task_runner
 from .db.session import AsyncSessionLocal
 from .api.routers import api_router
 
@@ -72,7 +73,11 @@ async def lifespan(app: FastAPI):
     async with AsyncSessionLocal() as session:
         prompt_service = PromptService(session)
         await prompt_service.preload()
-    yield
+    await generation_task_runner.start()
+    try:
+        yield
+    finally:
+        await generation_task_runner.stop()
 
 
 app = FastAPI(

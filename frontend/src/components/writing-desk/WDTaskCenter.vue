@@ -197,7 +197,8 @@ const retryTask = async (item: WriterTaskCenterItem) => {
   actionLoading[item.task_id] = true
   try {
     const result = await NovelAPI.retryWriterTask(props.projectId, item.chapter_number, {
-      force: true
+      force: true,
+      resume_from_checkpoint: true,
     })
     globalAlert.showSuccess(result.message || '重试任务已提交')
     await fetchTasks()

@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -76,8 +76,12 @@ class PipelineOrchestrator:
         user_id: int,
         writing_notes: Optional[str] = None,
         flow_config: Optional[Dict[str, Any]] = None,
+        progress_callback: Optional[Callable[[int, str, str], Awaitable[None]]] = None,
+        variant_callback: Optional[Callable[[List[Dict[str, Any]]], Awaitable[None]]] = None,
+        resume_variants: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         config = await self._resolve_config(flow_config)
+        await self._emit_progress(progress_callback, 5, "准备上下文", "正在加载项目与章节信息")
         project = await self.novel_service.ensure_project_owner(project_id, user_id)
 
         outline = await self.novel_service.get_outline(project_id, chapter_number)
@@ -89,6 +93,7 @@ class PipelineOrchestrator:
         chapter.selected_version_id = None
         chapter.status = "generating"
         await self.session.commit()
+        await self._emit_progress(progress_callback, 12, "整理历史上下文", "正在整合前文摘要与上下文")
 
         outlines_map = {item.chapter_number: item for item in project.outlines}
         history_context = await self._collect_history_context(
@@ -261,13 +266,21 @@ class PipelineOrchestrator:
 
         prompt_input = "\n\n".join(f"{title}\n{content}" for title, content in prompt_sections if content)
         logger.debug("Pipeline prompt length: %s chars", len(prompt_input))
+        await self._emit_progress(progress_callback, 22, "准备生成", "已完成上下文准备，开始生成候选版本")
 
         version_count = config.version_count
         version_style_hints = self._resolve_style_hints(enhanced_context, version_count)
 
-        versions: List[Dict[str, Any]] = []
-        for idx in range(version_count):
+        versions: List[Dict[str, Any]] = self._sanitize_resume_variants(resume_variants, version_count)
+        start_index = len(versions)
+        for idx in range(start_index, version_count):
             style_hint = version_style_hints[idx] if idx < len(version_style_hints) else None
+            await self._emit_progress(
+                progress_callback,
+                25 + int((idx / max(1, version_count)) * 35),
+                "生成候选版本",
+                f"正在生成第 {idx + 1}/{version_count} 个候选版本",
+            )
             versions.append(
                 await self._generate_single_version(
                     index=idx,
@@ -292,7 +305,10 @@ class PipelineOrchestrator:
                     writing_preset_meta=writing_preset_meta,
                 )
             )
+            if variant_callback:
+                await variant_callback(versions)
 
+        await self._emit_progress(progress_callback, 66, "评审候选版本", "正在评审并挑选最佳版本")
         best_version_index, ai_review_result = await self._run_ai_review(
             versions=versions,
             chapter_mission=chapter_mission,
@@ -372,6 +388,7 @@ class PipelineOrchestrator:
 
         contents = [v.get("content", "") for v in versions]
         metadata = [v.get("metadata") for v in versions]
+        await self._emit_progress(progress_callback, 88, "写入章节版本", "正在保存候选版本并更新章节状态")
         versions_models = await self.novel_service.replace_chapter_versions(chapter, contents, metadata)
 
         variants = []
@@ -384,6 +401,7 @@ class PipelineOrchestrator:
             }
             variants.append(variant)
 
+        await self._emit_progress(progress_callback, 100, "完成", "章节生成完成")
         return {
             "project_id": project_id,
             "chapter_number": chapter_number,
@@ -397,6 +415,42 @@ class PipelineOrchestrator:
                 "retrieval_stats": rag_stats,
             },
         }
+
+    @staticmethod
+    async def _emit_progress(
+        callback: Optional[Callable[[int, str, str], Awaitable[None]]],
+        progress: int,
+        stage: str,
+        message: str,
+    ) -> None:
+        if not callback:
+            return
+        await callback(max(0, min(100, int(progress))), stage, message)
+
+    @staticmethod
+    def _sanitize_resume_variants(
+        resume_variants: Optional[List[Dict[str, Any]]],
+        version_count: int,
+    ) -> List[Dict[str, Any]]:
+        if not resume_variants:
+            return []
+        normalized: List[Dict[str, Any]] = []
+        for idx, item in enumerate(resume_variants):
+            if idx >= version_count:
+                break
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            normalized.append(
+                {
+                    "index": idx,
+                    "content": content,
+                    "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+                }
+            )
+        return normalized
 
     async def _resolve_config(self, flow_config: Optional[Dict[str, Any]]) -> PipelineConfig:
         flow_config = flow_config or {}

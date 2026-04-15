@@ -4,6 +4,7 @@
 from .admin_setting import AdminSetting
 from .llm_config import LLMConfig
 from .llm_call_log import LLMCallLog
+from .generation_task import GenerationTask
 from .novel import (
     BlueprintCharacter,
     BlueprintRelationship,
@@ -59,6 +60,7 @@ __all__ = [
     "AdminSetting",
     "LLMConfig",
     "LLMCallLog",
+    "GenerationTask",
     "NovelConversation",
     "NovelBlueprint",
     "BlueprintCharacter",

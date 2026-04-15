@@ -270,6 +270,7 @@ class WriterTaskCenterResponse(BaseModel):
 class WriterTaskCenterRetryRequest(BaseModel):
     writing_notes: Optional[str] = None
     force: bool = False
+    resume_from_checkpoint: bool = True
 
 
 class WriterTaskCenterRetryResponse(BaseModel):

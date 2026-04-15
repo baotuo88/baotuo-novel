@@ -182,6 +182,7 @@ export interface WriterTaskCenterResponse {
 export interface WriterTaskRetryPayload {
   writing_notes?: string
   force?: boolean
+  resume_from_checkpoint?: boolean
 }
 
 export interface WriterTaskRetryResponse {
