@@ -985,62 +985,77 @@ async def check_chapter_consistency(
     session: AsyncSession = Depends(get_session),
     current_user: UserInDB = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    novel_service = NovelService(session)
-    await novel_service.ensure_project_owner(project_id, current_user.id)
+    try:
+        novel_service = NovelService(session)
+        await novel_service.ensure_project_owner(project_id, current_user.id)
 
-    stmt = (
-        select(Chapter)
-        .options(
-            selectinload(Chapter.versions),
-            selectinload(Chapter.selected_version),
+        stmt = (
+            select(Chapter)
+            .options(
+                selectinload(Chapter.versions),
+                selectinload(Chapter.selected_version),
+            )
+            .where(
+                Chapter.project_id == project_id,
+                Chapter.chapter_number == chapter_number,
+            )
         )
-        .where(
-            Chapter.project_id == project_id,
-            Chapter.chapter_number == chapter_number,
+        chapter = (await session.execute(stmt)).scalars().first()
+        if not chapter:
+            raise HTTPException(status_code=404, detail="章节不存在")
+
+        selected_version = chapter.selected_version
+        if not selected_version and chapter.versions:
+            selected_version = sorted(
+                chapter.versions,
+                key=lambda item: item.created_at.timestamp() if item.created_at else 0.0,
+            )[-1]
+
+        chapter_text = ""
+        if selected_version and selected_version.content:
+            chapter_text = selected_version.content
+        elif chapter.content:
+            chapter_text = chapter.content
+
+        if not chapter_text.strip():
+            raise HTTPException(status_code=400, detail="章节内容为空，无法执行一致性检查")
+
+        sync_session = getattr(session, "sync_session", session)
+        consistency_service = ConsistencyService(sync_session, LLMService(session))
+        result = await consistency_service.check_consistency(
+            project_id=project_id,
+            chapter_text=chapter_text,
+            user_id=current_user.id,
+            include_foreshadowing=True,
         )
-    )
-    chapter = (await session.execute(stmt)).scalars().first()
-    if not chapter:
-        raise HTTPException(status_code=404, detail="章节不存在")
+        report = _format_consistency_report(result)
 
-    selected_version = chapter.selected_version
-    if not selected_version and chapter.versions:
-        selected_version = sorted(
-            chapter.versions,
-            key=lambda item: item.created_at.timestamp() if item.created_at else 0.0,
-        )[-1]
+        if selected_version:
+            meta = selected_version.metadata if isinstance(selected_version.metadata, dict) else {}
+            meta["consistency_report"] = report
+            meta["consistency_checked_at"] = datetime.utcnow().isoformat()
+            selected_version.metadata = meta
+            await session.commit()
 
-    chapter_text = ""
-    if selected_version and selected_version.content:
-        chapter_text = selected_version.content
-    elif chapter.content:
-        chapter_text = chapter.content
-
-    if not chapter_text.strip():
-        raise HTTPException(status_code=400, detail="章节内容为空，无法执行一致性检查")
-
-    sync_session = getattr(session, "sync_session", session)
-    consistency_service = ConsistencyService(sync_session, LLMService(session))
-    result = await consistency_service.check_consistency(
-        project_id=project_id,
-        chapter_text=chapter_text,
-        user_id=current_user.id,
-        include_foreshadowing=True,
-    )
-    report = _format_consistency_report(result)
-
-    if selected_version:
-        meta = selected_version.metadata if isinstance(selected_version.metadata, dict) else {}
-        meta["consistency_report"] = report
-        meta["consistency_checked_at"] = datetime.utcnow().isoformat()
-        selected_version.metadata = meta
-        await session.commit()
-
-    return {
-        "project_id": project_id,
-        "chapter_number": chapter_number,
-        "review": report,
-    }
+        return {
+            "project_id": project_id,
+            "chapter_number": chapter_number,
+            "review": report,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "项目 %s 第 %s 章一致性检查接口异常: user_id=%s error=%s",
+            project_id,
+            chapter_number,
+            current_user.id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="一致性检查服务暂时不可用，请稍后重试。若持续失败请联系管理员检查日志。",
+        ) from exc
 
 
 @router.post("/novels/{project_id}/chapters/select", response_model=NovelProjectSchema)

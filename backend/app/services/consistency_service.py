@@ -157,7 +157,9 @@ class ConsistencyService:
         db: Session,
         llm_service: LLMService
     ):
-        self.db = db
+        # 兼容 AsyncSession / sync_session 混用场景，统一拿可 query 的会话
+        resolved_db = getattr(db, "sync_session", db)
+        self.db = resolved_db
         self.llm_service = llm_service
     
     async def check_consistency(
@@ -184,8 +186,12 @@ class ConsistencyService:
         
         start_time = time.time()
         
-        # 获取检查所需的上下文
-        context = await self._get_check_context(project_id, include_foreshadowing)
+        # 获取检查所需的上下文（上下文读取失败不应阻断主流程）
+        try:
+            context = await self._get_check_context(project_id, include_foreshadowing)
+        except Exception as exc:
+            logger.exception("一致性检查读取上下文失败，降级为空上下文: project_id=%s error=%s", project_id, exc)
+            context = {}
         
         # 构建检查提示词
         prompt = CONSISTENCY_CHECK_PROMPT.format(
@@ -344,9 +350,13 @@ class ConsistencyService:
         context = {}
         
         # 获取小说设定
-        blueprint = self.db.query(NovelBlueprint).filter(
-            NovelBlueprint.project_id == project_id
-        ).first()
+        blueprint = None
+        try:
+            blueprint = self.db.query(NovelBlueprint).filter(
+                NovelBlueprint.project_id == project_id
+            ).first()
+        except Exception as exc:
+            logger.warning("读取小说设定失败，已跳过: project_id=%s error=%s", project_id, exc)
         
         if blueprint:
             setting_parts = []
@@ -361,9 +371,13 @@ class ConsistencyService:
             context["novel_setting"] = "\n".join(setting_parts)
         
         # 获取项目记忆
-        memory = self.db.query(ProjectMemory).filter(
-            ProjectMemory.project_id == project_id
-        ).first()
+        memory = None
+        try:
+            memory = self.db.query(ProjectMemory).filter(
+                ProjectMemory.project_id == project_id
+            ).first()
+        except Exception as exc:
+            logger.warning("读取项目记忆失败，已跳过: project_id=%s error=%s", project_id, exc)
         
         if memory:
             context["global_summary"] = memory.global_summary or ""
@@ -373,9 +387,13 @@ class ConsistencyService:
         
         # 获取角色状态（简化版）
         from ..models.memory_layer import CharacterState
-        states = self.db.query(CharacterState).filter(
-            CharacterState.project_id == project_id
-        ).order_by(CharacterState.chapter_number.desc()).limit(10).all()
+        states = []
+        try:
+            states = self.db.query(CharacterState).filter(
+                CharacterState.project_id == project_id
+            ).order_by(CharacterState.chapter_number.desc()).limit(10).all()
+        except Exception as exc:
+            logger.warning("读取角色状态失败，已跳过: project_id=%s error=%s", project_id, exc)
         
         if states:
             state_texts = []
@@ -387,10 +405,14 @@ class ConsistencyService:
         
         # 获取未回收伏笔
         if include_foreshadowing:
-            foreshadowings = self.db.query(Foreshadowing).filter(
-                Foreshadowing.project_id == project_id,
-                Foreshadowing.status.in_(["planted", "developing"])
-            ).all()
+            foreshadowings = []
+            try:
+                foreshadowings = self.db.query(Foreshadowing).filter(
+                    Foreshadowing.project_id == project_id,
+                    Foreshadowing.status.in_(["planted", "developing"])
+                ).all()
+            except Exception as exc:
+                logger.warning("读取伏笔状态失败，已跳过: project_id=%s error=%s", project_id, exc)
             
             if foreshadowings:
                 foreshadowing_texts = [
