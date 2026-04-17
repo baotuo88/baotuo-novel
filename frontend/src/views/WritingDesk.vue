@@ -143,6 +143,7 @@ import type {
   ChapterOutline,
   ChapterGenerationResponse,
   ChapterVersion,
+  WriterTaskCenterItem,
   WriterTaskCenterResponse,
   WritingPresetItem,
 } from '@/api/novel'
@@ -192,12 +193,17 @@ const taskStreamConnected = ref(false)
 const taskStreamFallback = ref(false)
 const taskStreamReconnectAttempts = ref(0)
 const taskStreamLastError = ref('')
+const taskStreamFailureCount = ref(0)
+const taskStreamLastFailureMessage = ref('')
 const manualReconnectLoading = ref(false)
 const chapterQueueStateCache = new Map<number, string>()
+const taskStreamKnownFailedTaskIds = new Set<string>()
 const CHAPTER_STATUS_POLL_INTERVAL_MS = 5000
 const PROJECT_FULL_SYNC_INTERVAL_TICKS = 6
 const TASK_STREAM_RECONNECT_DELAY_MS = 2500
 const TASK_STREAM_MAX_RECONNECT_ATTEMPTS = 12
+const TASK_STREAM_FAILURE_RECENT_MINUTES = 8
+const TASK_STREAM_FAILURE_MESSAGE_MAX_LENGTH = 72
 
 // 计算属性
 const project = computed(() => novelStore.currentProject)
@@ -259,9 +265,12 @@ const hasActiveWriterTask = computed(() => {
   )
 })
 
-const showTaskSyncBanner = computed(() => hasActiveWriterTask.value)
+const showTaskSyncBanner = computed(() => hasActiveWriterTask.value || taskStreamFailureCount.value > 0)
 
 const taskSyncStatusText = computed(() => {
+  if (taskStreamFailureCount.value > 0) {
+    return `检测到 ${taskStreamFailureCount.value} 个任务失败`
+  }
   if (taskStreamConnected.value) {
     return '任务实时同步中'
   }
@@ -272,6 +281,9 @@ const taskSyncStatusText = computed(() => {
 })
 
 const taskSyncDetailText = computed(() => {
+  if (taskStreamFailureCount.value > 0) {
+    return taskStreamLastFailureMessage.value || '请在任务中心查看失败原因并重试'
+  }
   if (taskStreamConnected.value) {
     return '章节状态将即时更新'
   }
@@ -283,6 +295,17 @@ const taskSyncDetailText = computed(() => {
   }
   return '当前使用轮询同步'
 })
+
+const compactTaskMessage = (text: string, maxLength = TASK_STREAM_FAILURE_MESSAGE_MAX_LENGTH) => {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (!normalized) return ''
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized
+}
+
+const resolveTaskFailureMessage = (item: WriterTaskCenterItem) => {
+  const raw = item.error_message || item.status_message || item.stage_label || '任务失败，请重试'
+  return compactTaskMessage(raw)
+}
 
 const isCurrentVersion = (versionIndex: number) => {
   if (!selectedChapter.value?.content || !availableVersions.value?.[versionIndex]?.content) return false
@@ -562,6 +585,9 @@ const stopTaskStream = (options: { resetMeta?: boolean } = {}) => {
     taskStreamFallback.value = false
     taskStreamReconnectAttempts.value = 0
     taskStreamLastError.value = ''
+    taskStreamFailureCount.value = 0
+    taskStreamLastFailureMessage.value = ''
+    taskStreamKnownFailedTaskIds.clear()
   }
   chapterQueueStateCache.clear()
 }
@@ -626,6 +652,14 @@ const applyTaskSnapshot = async (snapshot: WriterTaskCenterResponse) => {
 
   const seenChapters = new Set<number>()
   const numbersNeedRefresh = new Set<number>()
+  const recentFailedItems = (snapshot.items || []).filter((item) => {
+    return item.queue_state === 'failed' && Number(item.age_minutes || 0) <= TASK_STREAM_FAILURE_RECENT_MINUTES
+  })
+
+  taskStreamFailureCount.value = recentFailedItems.length
+  taskStreamLastFailureMessage.value = recentFailedItems.length > 0
+    ? resolveTaskFailureMessage(recentFailedItems[0])
+    : ''
 
   for (const item of snapshot.items || []) {
     const chapterNumber = item.chapter_number
@@ -645,6 +679,15 @@ const applyTaskSnapshot = async (snapshot: WriterTaskCenterResponse) => {
 
     if (item.queue_state === 'failed') {
       chapter.generation_status = 'failed'
+      const isStateTransitionFailed = Boolean(previousQueueState && previousQueueState !== 'failed')
+      const isFreshFailure = Number(item.age_minutes || 0) <= 1
+      const shouldNotifyFailure = (isStateTransitionFailed || isFreshFailure) && !taskStreamKnownFailedTaskIds.has(item.task_id)
+      if (shouldNotifyFailure) {
+        const message = resolveTaskFailureMessage(item)
+        const title = `第${chapterNumber}章任务失败`
+        globalAlert.showError(message || '任务失败，请重试', title)
+      }
+      taskStreamKnownFailedTaskIds.add(item.task_id)
       if (previousQueueState !== 'failed') {
         numbersNeedRefresh.add(chapterNumber)
       }
@@ -678,7 +721,20 @@ const applyTaskSnapshot = async (snapshot: WriterTaskCenterResponse) => {
 const processTaskStreamEvent = async (rawEvent: string) => {
   const parsed = parseTaskStreamEvent(rawEvent)
   if (!parsed) return
-  if (parsed.eventName !== 'snapshot' || !parsed.data) {
+  if (!parsed.data) {
+    return
+  }
+  if (parsed.eventName === 'error') {
+    try {
+      const payload = JSON.parse(parsed.data) as { message?: string }
+      const message = compactTaskMessage(payload?.message || '任务同步异常')
+      taskStreamLastError.value = message || '任务同步异常'
+    } catch {
+      taskStreamLastError.value = compactTaskMessage(parsed.data) || '任务同步异常'
+    }
+    return
+  }
+  if (parsed.eventName !== 'snapshot') {
     return
   }
   try {
