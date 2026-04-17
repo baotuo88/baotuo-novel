@@ -88,6 +88,56 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("WRITER_CHAPTER_VERSION_COUNT", "WRITER_CHAPTER_VERSIONS"),
         description="每次生成章节的候选版本数量",
     )
+    generation_task_workers: int = Field(
+        default=1,
+        env="GENERATION_TASK_WORKERS",
+        description="后台生成任务并发 worker 数量。",
+    )
+    generation_task_heartbeat_interval_seconds: int = Field(
+        default=10,
+        env="GENERATION_TASK_HEARTBEAT_INTERVAL_SECONDS",
+        description="生成任务心跳更新间隔（秒）。",
+    )
+    generation_task_stale_timeout_seconds: int = Field(
+        default=300,
+        env="GENERATION_TASK_STALE_TIMEOUT_SECONDS",
+        description="任务心跳超时判定阈值（秒）。",
+    )
+    generation_task_stale_scan_interval_seconds: int = Field(
+        default=30,
+        env="GENERATION_TASK_STALE_SCAN_INTERVAL_SECONDS",
+        description="扫描并恢复卡死任务的间隔（秒）。",
+    )
+    generation_task_chapter_timeout_seconds: int = Field(
+        default=1800,
+        env="GENERATION_TASK_CHAPTER_TIMEOUT_SECONDS",
+        description="章节任务执行超时时间（秒）。",
+    )
+    generation_task_blueprint_timeout_seconds: int = Field(
+        default=1200,
+        env="GENERATION_TASK_BLUEPRINT_TIMEOUT_SECONDS",
+        description="蓝图任务执行超时时间（秒）。",
+    )
+    generation_task_auto_retry_max: int = Field(
+        default=1,
+        env="GENERATION_TASK_AUTO_RETRY_MAX",
+        description="任务失败后的最大自动重试次数。",
+    )
+    generation_task_retry_backoff_base_seconds: int = Field(
+        default=8,
+        env="GENERATION_TASK_RETRY_BACKOFF_BASE_SECONDS",
+        description="任务自动重试基础退避时间（秒）。",
+    )
+    generation_task_retry_backoff_max_seconds: int = Field(
+        default=180,
+        env="GENERATION_TASK_RETRY_BACKOFF_MAX_SECONDS",
+        description="任务自动重试最大退避时间（秒）。",
+    )
+    generation_task_policy_refresh_interval_seconds: int = Field(
+        default=30,
+        env="GENERATION_TASK_POLICY_REFRESH_INTERVAL_SECONDS",
+        description="从系统配置热更新任务策略的刷新间隔（秒）。",
+    )
     embedding_provider: str = Field(
         default="openai",
         env="EMBEDDING_PROVIDER",

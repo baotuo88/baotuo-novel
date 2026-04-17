@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
+import time
 from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import select, update
 
+from ..core.config import settings
 from ..db.session import AsyncSessionLocal
 from ..models.novel import Chapter
+from ..models.system_config import SystemConfig
 from .blueprint_generation_service import generate_blueprint_for_project
 from .generation_task_service import (
     TASK_STATUS_CANCELED,
@@ -26,59 +28,65 @@ logger = logging.getLogger(__name__)
 
 class GenerationTaskRunner:
     def __init__(self) -> None:
-        worker_count_raw = os.getenv("GENERATION_TASK_WORKERS", "1").strip()
-        try:
-            worker_count = int(worker_count_raw)
-        except ValueError:
-            worker_count = 1
-        self._worker_count = max(1, min(worker_count, 4))
-        self._heartbeat_interval_seconds = self._parse_env_int(
-            "GENERATION_TASK_HEARTBEAT_INTERVAL_SECONDS",
+        self._worker_count = self._clamp_int(
+            settings.generation_task_workers,
+            default=1,
+            min_value=1,
+            max_value=4,
+        )
+        self._heartbeat_interval_seconds = self._clamp_int(
+            settings.generation_task_heartbeat_interval_seconds,
             default=10,
             min_value=3,
             max_value=180,
         )
-        self._stale_timeout_seconds = self._parse_env_int(
-            "GENERATION_TASK_STALE_TIMEOUT_SECONDS",
+        self._stale_timeout_seconds = self._clamp_int(
+            settings.generation_task_stale_timeout_seconds,
             default=300,
             min_value=30,
             max_value=3600,
         )
-        self._stale_scan_interval_seconds = self._parse_env_int(
-            "GENERATION_TASK_STALE_SCAN_INTERVAL_SECONDS",
+        self._stale_scan_interval_seconds = self._clamp_int(
+            settings.generation_task_stale_scan_interval_seconds,
             default=30,
             min_value=10,
             max_value=600,
         )
-        self._chapter_timeout_seconds = self._parse_env_int(
-            "GENERATION_TASK_CHAPTER_TIMEOUT_SECONDS",
+        self._chapter_timeout_seconds = self._clamp_int(
+            settings.generation_task_chapter_timeout_seconds,
             default=1800,
             min_value=120,
             max_value=6 * 3600,
         )
-        self._blueprint_timeout_seconds = self._parse_env_int(
-            "GENERATION_TASK_BLUEPRINT_TIMEOUT_SECONDS",
+        self._blueprint_timeout_seconds = self._clamp_int(
+            settings.generation_task_blueprint_timeout_seconds,
             default=1200,
             min_value=120,
             max_value=6 * 3600,
         )
-        self._default_max_retries = self._parse_env_int(
-            "GENERATION_TASK_AUTO_RETRY_MAX",
+        self._default_max_retries = self._clamp_int(
+            settings.generation_task_auto_retry_max,
             default=1,
             min_value=0,
             max_value=6,
         )
-        self._retry_backoff_base_seconds = self._parse_env_int(
-            "GENERATION_TASK_RETRY_BACKOFF_BASE_SECONDS",
+        self._retry_backoff_base_seconds = self._clamp_int(
+            settings.generation_task_retry_backoff_base_seconds,
             default=8,
             min_value=1,
             max_value=300,
         )
-        self._retry_backoff_max_seconds = self._parse_env_int(
-            "GENERATION_TASK_RETRY_BACKOFF_MAX_SECONDS",
+        self._retry_backoff_max_seconds = self._clamp_int(
+            settings.generation_task_retry_backoff_max_seconds,
             default=180,
             min_value=1,
             max_value=3600,
+        )
+        self._policy_refresh_interval_seconds = self._clamp_int(
+            settings.generation_task_policy_refresh_interval_seconds,
+            default=30,
+            min_value=5,
+            max_value=600,
         )
 
         self._queue: asyncio.Queue[str] = asyncio.Queue()
@@ -89,20 +97,179 @@ class GenerationTaskRunner:
         self._stale_scan_handle: Optional[asyncio.Task] = None
         self._running = False
         self._lock = asyncio.Lock()
+        self._policy_refresh_lock = asyncio.Lock()
+        self._next_policy_refresh_at = 0.0
 
     @staticmethod
-    def _parse_env_int(name: str, *, default: int, min_value: int, max_value: int) -> int:
-        raw = os.getenv(name, str(default)).strip()
+    def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
         try:
-            value = int(raw)
-        except ValueError:
-            value = default
-        return max(min_value, min(max_value, value))
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = default
+        return max(min_value, min(max_value, parsed))
+
+    @staticmethod
+    def _policy_specs() -> tuple[tuple[str, str, int, int], ...]:
+        return (
+            ("generation.task.worker_count", "_worker_count", 1, 4),
+            ("generation.task.heartbeat_interval_seconds", "_heartbeat_interval_seconds", 3, 180),
+            ("generation.task.stale_timeout_seconds", "_stale_timeout_seconds", 30, 3600),
+            ("generation.task.stale_scan_interval_seconds", "_stale_scan_interval_seconds", 10, 600),
+            ("generation.task.chapter_timeout_seconds", "_chapter_timeout_seconds", 120, 6 * 3600),
+            ("generation.task.blueprint_timeout_seconds", "_blueprint_timeout_seconds", 120, 6 * 3600),
+            ("generation.task.auto_retry_max", "_default_max_retries", 0, 6),
+            ("generation.task.retry_backoff_base_seconds", "_retry_backoff_base_seconds", 1, 300),
+            ("generation.task.retry_backoff_max_seconds", "_retry_backoff_max_seconds", 1, 3600),
+            ("generation.task.policy_refresh_interval_seconds", "_policy_refresh_interval_seconds", 5, 600),
+        )
+
+    def _runtime_policy_snapshot(self) -> Dict[str, int]:
+        return {
+            "worker_count": self._worker_count,
+            "heartbeat_interval_seconds": self._heartbeat_interval_seconds,
+            "stale_timeout_seconds": self._stale_timeout_seconds,
+            "stale_scan_interval_seconds": self._stale_scan_interval_seconds,
+            "chapter_timeout_seconds": self._chapter_timeout_seconds,
+            "blueprint_timeout_seconds": self._blueprint_timeout_seconds,
+            "auto_retry_max": self._default_max_retries,
+            "retry_backoff_base_seconds": self._retry_backoff_base_seconds,
+            "retry_backoff_max_seconds": self._retry_backoff_max_seconds,
+            "policy_refresh_interval_seconds": self._policy_refresh_interval_seconds,
+        }
+
+    def _runtime_policy_defaults(self) -> Dict[str, int]:
+        return {
+            "_worker_count": self._clamp_int(settings.generation_task_workers, default=1, min_value=1, max_value=4),
+            "_heartbeat_interval_seconds": self._clamp_int(
+                settings.generation_task_heartbeat_interval_seconds,
+                default=10,
+                min_value=3,
+                max_value=180,
+            ),
+            "_stale_timeout_seconds": self._clamp_int(
+                settings.generation_task_stale_timeout_seconds,
+                default=300,
+                min_value=30,
+                max_value=3600,
+            ),
+            "_stale_scan_interval_seconds": self._clamp_int(
+                settings.generation_task_stale_scan_interval_seconds,
+                default=30,
+                min_value=10,
+                max_value=600,
+            ),
+            "_chapter_timeout_seconds": self._clamp_int(
+                settings.generation_task_chapter_timeout_seconds,
+                default=1800,
+                min_value=120,
+                max_value=6 * 3600,
+            ),
+            "_blueprint_timeout_seconds": self._clamp_int(
+                settings.generation_task_blueprint_timeout_seconds,
+                default=1200,
+                min_value=120,
+                max_value=6 * 3600,
+            ),
+            "_default_max_retries": self._clamp_int(
+                settings.generation_task_auto_retry_max,
+                default=1,
+                min_value=0,
+                max_value=6,
+            ),
+            "_retry_backoff_base_seconds": self._clamp_int(
+                settings.generation_task_retry_backoff_base_seconds,
+                default=8,
+                min_value=1,
+                max_value=300,
+            ),
+            "_retry_backoff_max_seconds": self._clamp_int(
+                settings.generation_task_retry_backoff_max_seconds,
+                default=180,
+                min_value=1,
+                max_value=3600,
+            ),
+            "_policy_refresh_interval_seconds": self._clamp_int(
+                settings.generation_task_policy_refresh_interval_seconds,
+                default=30,
+                min_value=5,
+                max_value=600,
+            ),
+        }
+
+    async def _load_runtime_policy_overrides(self) -> Dict[str, str]:
+        keys = [key for key, _, _, _ in self._policy_specs()]
+        async with AsyncSessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(SystemConfig.key, SystemConfig.value).where(SystemConfig.key.in_(keys))
+                )
+            ).all()
+        return {key: value for key, value in rows if value is not None}
+
+    async def _refresh_runtime_policy(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now < self._next_policy_refresh_at:
+            return
+        if self._policy_refresh_lock.locked() and not force:
+            return
+
+        async with self._policy_refresh_lock:
+            now = time.monotonic()
+            if not force and now < self._next_policy_refresh_at:
+                return
+
+            previous = self._runtime_policy_snapshot()
+            defaults = self._runtime_policy_defaults()
+
+            try:
+                overrides = await self._load_runtime_policy_overrides()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("加载 generation.task 策略失败，继续使用当前配置: error=%s", exc)
+                self._next_policy_refresh_at = time.monotonic() + max(5, min(60, self._policy_refresh_interval_seconds))
+                return
+
+            for key, attr_name, min_value, max_value in self._policy_specs():
+                default = defaults[attr_name]
+                raw_value = overrides.get(key)
+                parsed_value = (
+                    self._clamp_int(raw_value, default=default, min_value=min_value, max_value=max_value)
+                    if raw_value is not None
+                    else default
+                )
+                setattr(self, attr_name, parsed_value)
+
+            self._next_policy_refresh_at = time.monotonic() + self._policy_refresh_interval_seconds
+            current = self._runtime_policy_snapshot()
+            if current == previous:
+                return
+
+            if self._running and previous["worker_count"] != current["worker_count"]:
+                logger.warning(
+                    "generation.task.worker_count 已变更为 %s（当前运行中 worker=%s），重启服务后生效",
+                    current["worker_count"],
+                    previous["worker_count"],
+                )
+
+            logger.info(
+                "GenerationTaskRunner policy refreshed: workers=%s heartbeat=%ss stale_timeout=%ss stale_scan=%ss chapter_timeout=%ss blueprint_timeout=%ss auto_retry_max=%s backoff=%s/%ss refresh=%ss",
+                current["worker_count"],
+                current["heartbeat_interval_seconds"],
+                current["stale_timeout_seconds"],
+                current["stale_scan_interval_seconds"],
+                current["chapter_timeout_seconds"],
+                current["blueprint_timeout_seconds"],
+                current["auto_retry_max"],
+                current["retry_backoff_base_seconds"],
+                current["retry_backoff_max_seconds"],
+                current["policy_refresh_interval_seconds"],
+            )
 
     async def start(self) -> None:
         async with self._lock:
             if self._running:
                 return
+
+            await self._refresh_runtime_policy(force=True)
             self._running = True
 
             async with AsyncSessionLocal() as session:
@@ -127,7 +294,7 @@ class GenerationTaskRunner:
             )
 
             logger.info(
-                "GenerationTaskRunner started: workers=%s recovered=%s pending=%s heartbeat=%ss stale_timeout=%ss chapter_timeout=%ss blueprint_timeout=%ss auto_retry_max=%s",
+                "GenerationTaskRunner started: workers=%s recovered=%s pending=%s heartbeat=%ss stale_timeout=%ss chapter_timeout=%ss blueprint_timeout=%ss auto_retry_max=%s backoff=%s/%ss refresh=%ss",
                 self._worker_count,
                 recovered,
                 len(pending),
@@ -136,6 +303,9 @@ class GenerationTaskRunner:
                 self._chapter_timeout_seconds,
                 self._blueprint_timeout_seconds,
                 self._default_max_retries,
+                self._retry_backoff_base_seconds,
+                self._retry_backoff_max_seconds,
+                self._policy_refresh_interval_seconds,
             )
 
     async def stop(self) -> None:
@@ -242,6 +412,8 @@ class GenerationTaskRunner:
                 self._queue.task_done()
 
     async def _execute_task(self, task_id: str) -> None:
+        await self._refresh_runtime_policy()
+
         async with AsyncSessionLocal() as session:
             service = GenerationTaskService(session)
             task = await service.mark_running(
@@ -332,6 +504,7 @@ class GenerationTaskRunner:
     async def _stale_recovery_loop(self) -> None:
         while True:
             try:
+                await self._refresh_runtime_policy()
                 await asyncio.sleep(self._stale_scan_interval_seconds)
                 await self._recover_stale_running_tasks_once()
             except asyncio.CancelledError:
@@ -363,6 +536,8 @@ class GenerationTaskRunner:
         self,
         task_id: str,
     ) -> Optional[Tuple[str, int, int, int]]:
+        await self._refresh_runtime_policy()
+
         async with AsyncSessionLocal() as session:
             service = GenerationTaskService(session)
             task = await service.get_task(task_id)

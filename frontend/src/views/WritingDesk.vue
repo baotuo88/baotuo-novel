@@ -37,54 +37,72 @@
       </div>
 
       <!-- 主要内容 -->
-      <div v-else-if="project" class="h-full min-h-0 flex gap-4 lg:gap-5 xl:gap-6">
-        <WDSidebar
-          :project="project"
-          :sidebar-open="sidebarOpen"
-          :selected-chapter-number="selectedChapterNumber"
-          :generating-chapter="generatingChapter"
-          :evaluating-chapter="evaluatingChapter"
-          :is-generating-outline="isGeneratingOutline"
-          :writing-presets="writingPresets"
-          :selected-preset-id="selectedPresetId"
-          :active-preset-name="activeWritingPreset?.name || null"
-          :preset-loading="presetLoading"
-          :preset-applying="presetApplying"
-          :preset-collapse-token="presetCollapseToken"
-          @close-sidebar="closeSidebar"
-          @select-chapter="selectChapter"
-          @generate-chapter="generateChapter"
-          @edit-chapter="openEditChapterModal"
-          @delete-chapter="deleteChapter"
-          @generate-outline="generateOutline"
-          @update:selected-preset-id="selectedPresetId = $event"
-          @apply-preset="applyWritingPreset"
-          @clear-preset="clearWritingPreset"
-        />
+      <div v-else-if="project" class="h-full min-h-0 flex flex-col gap-3">
+        <div v-if="showTaskSyncBanner" :class="['task-sync-banner', taskSyncBannerClass]">
+          <div class="task-sync-main">
+            <span :class="['task-sync-dot', taskSyncDotClass]"></span>
+            <span class="task-sync-title">{{ taskSyncStatusText }}</span>
+            <span class="task-sync-detail">{{ taskSyncDetailText }}</span>
+          </div>
+          <button
+            v-if="!taskStreamConnected"
+            class="md-btn md-btn-text md-ripple task-sync-action"
+            :disabled="manualReconnectLoading"
+            @click="reconnectTaskStreamManually"
+          >
+            {{ manualReconnectLoading ? '重连中...' : '立即重连' }}
+          </button>
+        </div>
 
-        <div class="flex-1 min-w-0 min-h-0">
-          <WDWorkspace
+        <div class="flex-1 min-h-0 flex gap-4 lg:gap-5 xl:gap-6">
+          <WDSidebar
             :project="project"
+            :sidebar-open="sidebarOpen"
             :selected-chapter-number="selectedChapterNumber"
-          :generating-chapter="generatingChapter"
-          :evaluating-chapter="evaluatingChapter"
-          :show-version-selector="showVersionSelector"
-          :chapter-generation-result="chapterGenerationResult"
-          :selected-version-index="selectedVersionIndex"
-          :available-versions="availableVersions"
-          :is-selecting-version="isSelectingVersion"
-          @regenerate-chapter="regenerateChapter"
-          @evaluate-chapter="evaluateChapter"
-          @hide-version-selector="hideVersionSelector"
-          @update:selected-version-index="selectedVersionIndex = $event"
-          @show-version-detail="showVersionDetail"
-          @confirm-version-selection="confirmVersionSelection"
-          @generate-chapter="generateChapter"
-          @show-evaluation-detail="showEvaluationDetailModal = true"
-          @fetch-chapter-status="fetchChapterStatus"
-          @edit-chapter="editChapterContent"
-          @version-rolled-back="handleVersionRolledBack"
+            :generating-chapter="generatingChapter"
+            :evaluating-chapter="evaluatingChapter"
+            :is-generating-outline="isGeneratingOutline"
+            :writing-presets="writingPresets"
+            :selected-preset-id="selectedPresetId"
+            :active-preset-name="activeWritingPreset?.name || null"
+            :preset-loading="presetLoading"
+            :preset-applying="presetApplying"
+            :preset-collapse-token="presetCollapseToken"
+            @close-sidebar="closeSidebar"
+            @select-chapter="selectChapter"
+            @generate-chapter="generateChapter"
+            @edit-chapter="openEditChapterModal"
+            @delete-chapter="deleteChapter"
+            @generate-outline="generateOutline"
+            @update:selected-preset-id="selectedPresetId = $event"
+            @apply-preset="applyWritingPreset"
+            @clear-preset="clearWritingPreset"
           />
+
+          <div class="flex-1 min-w-0 min-h-0">
+            <WDWorkspace
+              :project="project"
+              :selected-chapter-number="selectedChapterNumber"
+            :generating-chapter="generatingChapter"
+            :evaluating-chapter="evaluatingChapter"
+            :show-version-selector="showVersionSelector"
+            :chapter-generation-result="chapterGenerationResult"
+            :selected-version-index="selectedVersionIndex"
+            :available-versions="availableVersions"
+            :is-selecting-version="isSelectingVersion"
+            @regenerate-chapter="regenerateChapter"
+            @evaluate-chapter="evaluateChapter"
+            @hide-version-selector="hideVersionSelector"
+            @update:selected-version-index="selectedVersionIndex = $event"
+            @show-version-detail="showVersionDetail"
+            @confirm-version-selection="confirmVersionSelection"
+            @generate-chapter="generateChapter"
+            @show-evaluation-detail="showEvaluationDetailModal = true"
+            @fetch-chapter-status="fetchChapterStatus"
+            @edit-chapter="editChapterContent"
+            @version-rolled-back="handleVersionRolledBack"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -181,10 +199,14 @@ let taskStreamReconnectTimer: number | null = null
 let taskStreamAbortController: AbortController | null = null
 const taskStreamConnected = ref(false)
 const taskStreamFallback = ref(false)
+const taskStreamReconnectAttempts = ref(0)
+const taskStreamLastError = ref('')
+const manualReconnectLoading = ref(false)
 const chapterQueueStateCache = new Map<number, string>()
 const CHAPTER_STATUS_POLL_INTERVAL_MS = 5000
 const PROJECT_FULL_SYNC_INTERVAL_TICKS = 6
 const TASK_STREAM_RECONNECT_DELAY_MS = 2500
+const TASK_STREAM_MAX_RECONNECT_ATTEMPTS = 12
 
 // 计算属性
 const project = computed(() => novelStore.currentProject)
@@ -244,6 +266,39 @@ const hasActiveWriterTask = computed(() => {
   return (project.value?.chapters || []).some((chapter) =>
     ['generating', 'evaluating', 'selecting'].includes(chapter.generation_status)
   )
+})
+
+const showTaskSyncBanner = computed(() => hasActiveWriterTask.value)
+
+const taskSyncBannerClass = computed(() => {
+  return taskStreamConnected.value ? 'task-sync-ok' : 'task-sync-warn'
+})
+
+const taskSyncDotClass = computed(() => {
+  return taskStreamConnected.value ? 'task-sync-dot-ok' : 'task-sync-dot-warn'
+})
+
+const taskSyncStatusText = computed(() => {
+  if (taskStreamConnected.value) {
+    return '任务实时同步中'
+  }
+  if (taskStreamFallback.value) {
+    return '实时连接中断，已切换轮询同步'
+  }
+  return '正在建立任务实时连接'
+})
+
+const taskSyncDetailText = computed(() => {
+  if (taskStreamConnected.value) {
+    return '章节状态将即时更新'
+  }
+  if (taskStreamReconnectAttempts.value > 0) {
+    return `自动重连中（第 ${taskStreamReconnectAttempts.value} 次）`
+  }
+  if (taskStreamLastError.value) {
+    return taskStreamLastError.value
+  }
+  return '当前使用轮询同步'
 })
 
 const isCurrentVersion = (versionIndex: number) => {
@@ -512,20 +567,30 @@ const stopTaskStreamReconnect = () => {
   }
 }
 
-const stopTaskStream = () => {
+const stopTaskStream = (options: { resetMeta?: boolean } = {}) => {
+  const resetMeta = options.resetMeta ?? true
   stopTaskStreamReconnect()
   if (taskStreamAbortController) {
     taskStreamAbortController.abort()
     taskStreamAbortController = null
   }
   taskStreamConnected.value = false
-  taskStreamFallback.value = false
+  if (resetMeta) {
+    taskStreamFallback.value = false
+    taskStreamReconnectAttempts.value = 0
+    taskStreamLastError.value = ''
+  }
   chapterQueueStateCache.clear()
 }
 
 const scheduleTaskStreamReconnect = () => {
   if (!shouldKeepTaskStream()) return
+  if (taskStreamReconnectAttempts.value >= TASK_STREAM_MAX_RECONNECT_ATTEMPTS) {
+    taskStreamLastError.value = `自动重连已达上限（${TASK_STREAM_MAX_RECONNECT_ATTEMPTS} 次）`
+    return
+  }
   stopTaskStreamReconnect()
+  taskStreamReconnectAttempts.value += 1
   taskStreamReconnectTimer = window.setTimeout(() => {
     void startTaskStream()
   }, TASK_STREAM_RECONNECT_DELAY_MS)
@@ -644,11 +709,13 @@ const processTaskStreamEvent = async (rawEvent: string) => {
 const startTaskStream = async () => {
   if (!shouldKeepTaskStream()) return
 
-  stopTaskStream()
+  stopTaskStream({ resetMeta: false })
   stopChapterStatusPolling()
 
   if (!authStore.token) {
     taskStreamFallback.value = true
+    taskStreamConnected.value = false
+    taskStreamLastError.value = '当前会话缺少登录凭证，已切换轮询同步'
     startChapterStatusPolling()
     return
   }
@@ -678,6 +745,8 @@ const startTaskStream = async () => {
 
     taskStreamConnected.value = true
     taskStreamFallback.value = false
+    taskStreamReconnectAttempts.value = 0
+    taskStreamLastError.value = ''
 
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
@@ -702,6 +771,7 @@ const startTaskStream = async () => {
       console.warn('写作任务实时流中断，回退轮询:', error)
       taskStreamConnected.value = false
       taskStreamFallback.value = true
+      taskStreamLastError.value = error instanceof Error ? error.message : '实时连接中断'
       startChapterStatusPolling()
       scheduleTaskStreamReconnect()
     }
@@ -710,6 +780,20 @@ const startTaskStream = async () => {
       taskStreamAbortController = null
       taskStreamConnected.value = false
     }
+  }
+}
+
+const reconnectTaskStreamManually = async () => {
+  if (!hasActiveWriterTask.value || manualReconnectLoading.value) {
+    return
+  }
+  manualReconnectLoading.value = true
+  taskStreamReconnectAttempts.value = 0
+  taskStreamLastError.value = ''
+  try {
+    await startTaskStream()
+  } finally {
+    manualReconnectLoading.value = false
   }
 }
 
@@ -1051,6 +1135,79 @@ onUnmounted(() => {
 @media (prefers-reduced-motion: reduce) {
   .m3-shell {
     animation: none;
+  }
+}
+
+.task-sync-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: var(--md-radius-md);
+  border: 1px solid var(--md-outline-variant);
+  padding: 10px 14px;
+  backdrop-filter: blur(8px);
+}
+
+.task-sync-ok {
+  background: color-mix(in srgb, var(--md-success-container) 58%, white 42%);
+  border-color: color-mix(in srgb, var(--md-success) 24%, var(--md-outline-variant) 76%);
+}
+
+.task-sync-warn {
+  background: color-mix(in srgb, var(--md-warning-container) 72%, white 28%);
+  border-color: color-mix(in srgb, var(--md-warning) 24%, var(--md-outline-variant) 76%);
+}
+
+.task-sync-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.task-sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.task-sync-dot-ok {
+  background: var(--md-success);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--md-success) 18%, transparent 82%);
+}
+
+.task-sync-dot-warn {
+  background: var(--md-warning);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--md-warning) 24%, transparent 76%);
+}
+
+.task-sync-title {
+  font-weight: 600;
+  font-size: 0.86rem;
+  color: var(--md-on-surface);
+}
+
+.task-sync-detail {
+  font-size: 0.78rem;
+  color: var(--md-on-surface-variant);
+}
+
+.task-sync-action {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+}
+
+@media (max-width: 640px) {
+  .task-sync-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .task-sync-action {
+    padding-left: 0;
   }
 }
 

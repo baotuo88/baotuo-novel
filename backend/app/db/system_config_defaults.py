@@ -184,6 +184,56 @@ SYSTEM_CONFIG_DEFAULTS: list[SystemConfigDefault] = [
         description="每次生成章节的候选版本数量。",
     ),
     SystemConfigDefault(
+        key="generation.task.worker_count",
+        value_getter=lambda config: _to_optional_str(config.generation_task_workers),
+        description="任务执行 worker 数量（运行中修改需重启服务生效）。",
+    ),
+    SystemConfigDefault(
+        key="generation.task.heartbeat_interval_seconds",
+        value_getter=lambda config: _to_optional_str(config.generation_task_heartbeat_interval_seconds),
+        description="任务心跳写入间隔（秒）。",
+    ),
+    SystemConfigDefault(
+        key="generation.task.stale_timeout_seconds",
+        value_getter=lambda config: _to_optional_str(config.generation_task_stale_timeout_seconds),
+        description="任务卡死判定阈值（秒）。",
+    ),
+    SystemConfigDefault(
+        key="generation.task.stale_scan_interval_seconds",
+        value_getter=lambda config: _to_optional_str(config.generation_task_stale_scan_interval_seconds),
+        description="卡死任务扫描周期（秒）。",
+    ),
+    SystemConfigDefault(
+        key="generation.task.chapter_timeout_seconds",
+        value_getter=lambda config: _to_optional_str(config.generation_task_chapter_timeout_seconds),
+        description="章节生成任务超时时间（秒）。",
+    ),
+    SystemConfigDefault(
+        key="generation.task.blueprint_timeout_seconds",
+        value_getter=lambda config: _to_optional_str(config.generation_task_blueprint_timeout_seconds),
+        description="蓝图生成任务超时时间（秒）。",
+    ),
+    SystemConfigDefault(
+        key="generation.task.auto_retry_max",
+        value_getter=lambda config: _to_optional_str(config.generation_task_auto_retry_max),
+        description="任务失败后自动重试上限。",
+    ),
+    SystemConfigDefault(
+        key="generation.task.retry_backoff_base_seconds",
+        value_getter=lambda config: _to_optional_str(config.generation_task_retry_backoff_base_seconds),
+        description="自动重试基础退避时间（秒）。",
+    ),
+    SystemConfigDefault(
+        key="generation.task.retry_backoff_max_seconds",
+        value_getter=lambda config: _to_optional_str(config.generation_task_retry_backoff_max_seconds),
+        description="自动重试最大退避时间（秒）。",
+    ),
+    SystemConfigDefault(
+        key="generation.task.policy_refresh_interval_seconds",
+        value_getter=lambda config: _to_optional_str(config.generation_task_policy_refresh_interval_seconds),
+        description="任务策略热更新刷新周期（秒）。",
+    ),
+    SystemConfigDefault(
         key="embedding.provider",
         value_getter=lambda config: config.embedding_provider,
         description="嵌入模型提供方，支持 openai 或 ollama。",
