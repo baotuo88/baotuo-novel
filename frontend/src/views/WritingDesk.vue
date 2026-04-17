@@ -13,7 +13,7 @@
     />
 
     <!-- 主要内容区域 -->
-    <div class="flex-1 min-h-0 w-full px-4 sm:px-6 lg:px-5 xl:px-6 2xl:px-8 py-6 overflow-hidden">
+    <div class="flex-1 min-h-0 w-full px-4 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 py-6 overflow-hidden">
       <!-- 加载状态 -->
       <div v-if="novelStore.isLoading" class="h-full flex justify-center items-center">
         <div class="text-center">
@@ -37,7 +37,7 @@
       </div>
 
       <!-- 主要内容 -->
-      <div v-else-if="project" class="h-full min-h-0 flex gap-4 xl:gap-6">
+      <div v-else-if="project" class="h-full min-h-0 flex gap-4 lg:gap-5 xl:gap-6">
         <WDSidebar
           :project="project"
           :sidebar-open="sidebarOpen"

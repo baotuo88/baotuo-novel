@@ -5,17 +5,17 @@
     <div
       v-if="sidebarOpen"
       @click="$emit('closeSidebar')"
-      class="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 2xl:hidden"
+      class="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 lg:hidden"
     ></div>
 
     <!-- 左侧：蓝图和章节列表 -->
     <div
       :class="[
         'md-card md-card-elevated transition-all duration-300 h-full',
-        '2xl:relative 2xl:translate-x-0 2xl:w-80 2xl:flex-shrink-0',
+        'lg:relative lg:translate-x-0 lg:w-[clamp(15rem,23vw,19rem)] lg:flex-shrink-0',
         sidebarOpen
-          ? 'fixed left-4 right-4 top-20 bottom-4 z-50 translate-x-0 2xl:right-auto 2xl:w-80'
-          : '2xl:w-80 2xl:flex-shrink-0 -translate-x-full absolute 2xl:relative'
+          ? 'fixed left-4 right-4 top-20 bottom-4 z-50 translate-x-0 lg:static lg:inset-auto lg:z-auto lg:right-auto lg:w-[clamp(15rem,23vw,19rem)]'
+          : '-translate-x-full absolute lg:translate-x-0 lg:relative lg:w-[clamp(15rem,23vw,19rem)] lg:flex-shrink-0'
       ]"
       style="border-radius: var(--md-radius-xl);"
     >
