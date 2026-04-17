@@ -12,16 +12,16 @@
     <div
       :class="[
         'md-card md-card-elevated transition-all duration-300 h-full',
-        'lg:relative lg:translate-x-0 lg:w-[clamp(15rem,23vw,19rem)] lg:flex-shrink-0',
+        'lg:relative lg:translate-x-0 lg:w-[clamp(16rem,24vw,20rem)] lg:flex-shrink-0',
         sidebarOpen
-          ? 'fixed left-4 right-4 top-20 bottom-4 z-50 translate-x-0 lg:static lg:inset-auto lg:z-auto lg:right-auto lg:w-[clamp(15rem,23vw,19rem)]'
-          : '-translate-x-full absolute lg:translate-x-0 lg:relative lg:w-[clamp(15rem,23vw,19rem)] lg:flex-shrink-0'
+          ? 'fixed left-4 right-4 top-20 bottom-4 z-50 translate-x-0 lg:static lg:inset-auto lg:z-auto lg:right-auto lg:w-[clamp(16rem,24vw,20rem)]'
+          : '-translate-x-full absolute lg:translate-x-0 lg:relative lg:w-[clamp(16rem,24vw,20rem)] lg:flex-shrink-0'
       ]"
       style="border-radius: var(--md-radius-xl);"
     >
-      <div class="h-full flex flex-col">
+      <div class="h-full min-h-0 flex flex-col">
         <!-- 蓝图预览卡片 -->
-        <div class="md-card-header flex-shrink-0">
+        <div class="md-card-header flex-shrink-0 m3-sidebar-top">
           <div class="flex items-center gap-3 mb-4">
             <div class="w-10 h-10 rounded-full flex items-center justify-center" style="background-color: var(--md-primary-container);">
               <svg class="w-5 h-5" style="color: var(--md-on-primary-container);" fill="currentColor" viewBox="0 0 20 20">
@@ -35,7 +35,7 @@
           </div>
 
           <div class="space-y-3">
-            <div class="md-card md-card-filled p-3" style="border-radius: var(--md-radius-md);">
+            <div class="md-card md-card-filled p-3 m3-summary-card" style="border-radius: var(--md-radius-md);">
               <h3 class="md-label-large font-semibold" style="color: var(--md-on-primary-container);">故事概要</h3>
               <Tooltip :text="project.blueprint?.one_sentence_summary">
                 <p class="md-body-small line-clamp-3" style="color: var(--md-on-surface-variant);">{{ project.blueprint?.one_sentence_summary || '暂无概要' }}</p>
@@ -77,7 +77,7 @@
                 </div>
               </div>
             </div>
-            <div class="grid grid-cols-2 gap-2 text-xs">
+            <div class="grid grid-cols-2 gap-2 text-xs m3-sidebar-metrics">
               <div class="md-card md-card-outlined p-2 text-center" style="border-radius: var(--md-radius-md);">
                 <div class="md-title-small font-semibold" style="color: var(--md-primary);">{{ characterCount }}</div>
                 <div class="md-label-small md-on-surface-variant">角色</div>
@@ -91,8 +91,8 @@
         </div>
 
         <!-- 章节列表 -->
-        <div ref="listContainer" class="flex-1 overflow-y-auto">
-          <div class="p-6 pb-4">
+        <div ref="listContainer" class="flex-1 min-h-0 overflow-y-auto">
+          <div class="p-6 pb-4 m3-outline-header">
             <div class="flex items-center justify-between mb-4">
               <h3 class="md-title-medium font-semibold">章节大纲</h3>
               <div class="flex items-center gap-2">
@@ -110,7 +110,7 @@
             </div>
           </div>
 
-          <div class="px-6 pb-6">
+          <div class="px-6 pb-6 m3-outline-list">
             <div v-if="project.blueprint?.chapter_outline?.length" class="space-y-3">
               <div
                 v-for="(chapter, index) in project.blueprint.chapter_outline"
@@ -556,6 +556,28 @@ const canGenerateChapter = (chapterNumber: number) => {
   color: var(--md-on-surface);
   padding: 0 10px;
   font-size: 13px;
+}
+
+@media (max-height: 860px) {
+  .m3-sidebar-top {
+    padding: 16px;
+  }
+
+  .m3-summary-card {
+    display: none;
+  }
+
+  .m3-sidebar-metrics {
+    display: none;
+  }
+
+  .m3-outline-header {
+    padding: 16px 16px 10px;
+  }
+
+  .m3-outline-list {
+    padding: 0 16px 16px;
+  }
 }
 
 @keyframes m3-rise {
