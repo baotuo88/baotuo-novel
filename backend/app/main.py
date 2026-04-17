@@ -87,11 +87,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS 配置，生产环境建议改为具体域名
+# CORS 配置（支持通过 CORS_ALLOW_ORIGINS 精确控制来源）
+cors_origins = settings.cors_allowed_origins
+allow_all_origins = "*" in cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["*"] if allow_all_origins else cors_origins,
+    allow_credentials=not allow_all_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

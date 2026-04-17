@@ -12,7 +12,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,6 +35,10 @@ class Faction(Base):
     """势力实体"""
 
     __tablename__ = "factions"
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_factions_project_name"),
+        Index("ix_factions_project_name", "project_id", "name"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     project_id: Mapped[str] = mapped_column(
@@ -66,6 +80,16 @@ class FactionRelationship(Base):
     """势力间关系"""
 
     __tablename__ = "faction_relationships"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "faction_from_id",
+            "faction_to_id",
+            name="uq_faction_relationships_project_pair",
+        ),
+        Index("ix_faction_relationships_project", "project_id"),
+        Index("ix_faction_relationships_from_to", "faction_from_id", "faction_to_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     project_id: Mapped[str] = mapped_column(
@@ -103,6 +127,10 @@ class FactionMember(Base):
     """势力成员（角色与势力的关联）"""
 
     __tablename__ = "faction_members"
+    __table_args__ = (
+        UniqueConstraint("faction_id", "character_id", name="uq_faction_members_faction_character"),
+        Index("ix_faction_members_project", "project_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     project_id: Mapped[str] = mapped_column(
@@ -113,7 +141,7 @@ class FactionMember(Base):
         ForeignKey("factions.id", ondelete="CASCADE"), nullable=False
     )
     character_id: Mapped[int] = mapped_column(
-        ForeignKey("blueprint_characters.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("blueprint_characters.id", ondelete="CASCADE"), nullable=False, index=True
     )
     
     # ===== 成员属性 =====

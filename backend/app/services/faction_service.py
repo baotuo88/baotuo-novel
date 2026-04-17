@@ -8,6 +8,7 @@ import json
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
+from sqlalchemy.exc import IntegrityError
 
 from ..models.faction import (
     Faction,
@@ -47,8 +48,14 @@ class FactionService:
         for key, value in data.items():
             if hasattr(faction, key):
                 setattr(faction, key, value)
+        if isinstance(faction.name, str):
+            faction.name = faction.name.strip()
         self.db.add(faction)
-        await self.db.commit()
+        try:
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise ValueError("势力名称重复，请修改后重试") from exc
         await self.db.refresh(faction)
         return faction
 
@@ -60,7 +67,13 @@ class FactionService:
         for key, value in data.items():
             if hasattr(faction, key):
                 setattr(faction, key, value)
-        await self.db.commit()
+        if isinstance(faction.name, str):
+            faction.name = faction.name.strip()
+        try:
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise ValueError("势力名称重复，请修改后重试") from exc
         await self.db.refresh(faction)
         return faction
 

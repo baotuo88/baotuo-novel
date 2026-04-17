@@ -693,19 +693,49 @@ async def put_factions(
     await novel_service.ensure_project_owner(project_id, current_user.id)
 
     faction_service = FactionService(session, PromptService(session))
-    saved = []
+    existing_factions = await faction_service.get_factions_by_project(project_id)
+    existing_by_id = {item.id: item for item in existing_factions}
+    existing_by_name = {item.name.strip().lower(): item for item in existing_factions if isinstance(item.name, str)}
+
+    normalized_payload: List[Dict[str, Any]] = []
+    seen_name_keys: set[str] = set()
     for faction_payload in payload:
         data = faction_payload.model_dump(exclude_unset=True)
-        faction_id = data.pop("id", None)
-        if faction_id:
-            existing = await faction_service.get_faction(faction_id)
-            if not existing or existing.project_id != project_id:
-                continue
-            faction = await faction_service.update_faction(faction_id, data)
-            if faction:
-                saved.append(faction)
-        else:
-            saved.append(await faction_service.create_faction(project_id, data))
+        name = str(data.get("name", "")).strip()
+        if not name:
+            continue
+        name_key = name.lower()
+        if name_key in seen_name_keys:
+            continue
+        data["name"] = name
+        normalized_payload.append(data)
+        seen_name_keys.add(name_key)
+
+    saved = []
+    try:
+        for data in normalized_payload:
+            faction_id = data.pop("id", None)
+            if faction_id:
+                existing = existing_by_id.get(faction_id)
+                if not existing:
+                    continue
+                faction = await faction_service.update_faction(existing.id, data)
+                if faction:
+                    saved.append(faction)
+                    existing_by_name[faction.name.strip().lower()] = faction
+            else:
+                match = existing_by_name.get(str(data.get("name", "")).strip().lower())
+                if match:
+                    faction = await faction_service.update_faction(match.id, data)
+                    if faction:
+                        saved.append(faction)
+                        existing_by_name[faction.name.strip().lower()] = faction
+                else:
+                    faction = await faction_service.create_faction(project_id, data)
+                    saved.append(faction)
+                    existing_by_name[faction.name.strip().lower()] = faction
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {"project_id": project_id, "factions": [_model_to_dict(faction) for faction in saved]}
 
@@ -745,17 +775,24 @@ async def put_faction_relationships(
     factions = await faction_service.get_factions_by_project(project_id)
     faction_ids = {item.id for item in factions}
 
+    normalized_relations: List[FactionRelationshipPayload] = []
+    seen_pairs: set[tuple[int, int]] = set()
     for relation in payload:
         if relation.faction_from_id not in faction_ids or relation.faction_to_id not in faction_ids:
             raise HTTPException(status_code=400, detail="势力关系包含无效的 faction_id")
         if relation.faction_from_id == relation.faction_to_id:
             raise HTTPException(status_code=400, detail="势力关系的起点和终点不能相同")
+        pair = (relation.faction_from_id, relation.faction_to_id)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        normalized_relations.append(relation)
 
     await session.execute(
         delete(FactionRelationship).where(FactionRelationship.project_id == project_id)
     )
 
-    for relation in payload:
+    for relation in normalized_relations:
         session.add(
             FactionRelationship(
                 project_id=project_id,

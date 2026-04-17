@@ -2,6 +2,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type {
+  Chapter,
   NovelProject,
   NovelProjectSummary,
   ConverseResponse,
@@ -93,6 +94,55 @@ export const useNovelStore = defineStore('novel', () => {
       return chapter
     } catch (err) {
       error.value = err instanceof Error ? err.message : '加载章节失败'
+      throw err
+    }
+  }
+
+  const mergeChapterMeta = (oldChapter: Chapter | undefined, incoming: Chapter): Chapter => {
+    if (!oldChapter) {
+      return incoming
+    }
+    return {
+      ...oldChapter,
+      ...incoming,
+      // section=chapters 时后端会返回 null，不能把已加载内容覆盖掉
+      content: incoming.content ?? oldChapter.content,
+      versions: incoming.versions ?? oldChapter.versions,
+      evaluation: incoming.evaluation ?? oldChapter.evaluation,
+      word_count: incoming.word_count ?? oldChapter.word_count
+    }
+  }
+
+  async function refreshChapterStatuses(projectId: string) {
+    error.value = null
+    try {
+      if (!currentProject.value || currentProject.value.id !== projectId) {
+        return
+      }
+      const section = await NovelAPI.getSection(projectId, 'chapters')
+      const incomingList = Array.isArray(section.data?.chapters)
+        ? (section.data.chapters as Chapter[])
+        : []
+
+      const oldMap = new Map(
+        (currentProject.value.chapters || []).map((chapter) => [chapter.chapter_number, chapter])
+      )
+
+      const merged: Chapter[] = incomingList.map((incoming) =>
+        mergeChapterMeta(oldMap.get(incoming.chapter_number), incoming)
+      )
+      const mergedNumbers = new Set(merged.map((item) => item.chapter_number))
+
+      for (const oldChapter of currentProject.value.chapters || []) {
+        if (!mergedNumbers.has(oldChapter.chapter_number)) {
+          merged.push(oldChapter)
+        }
+      }
+
+      merged.sort((a, b) => a.chapter_number - b.chapter_number)
+      currentProject.value.chapters = merged
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : '刷新章节状态失败'
       throw err
     }
   }
@@ -402,6 +452,7 @@ export const useNovelStore = defineStore('novel', () => {
     createProject,
     loadProject,
     loadChapter,
+    refreshChapterStatuses,
     sendConversation,
     generateBlueprint,
     saveBlueprint,

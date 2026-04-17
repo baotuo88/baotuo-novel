@@ -378,7 +378,7 @@ const removeFaction = (index: number) => {
 
 const saveFactions = async () => {
   if (!props.projectId) return
-  const payload = factions.value
+  const rawPayload = factions.value
     .map((item) => ({
       id: item.id,
       name: String(item.name || '').trim(),
@@ -389,6 +389,21 @@ const saveFactions = async () => {
       current_status: String(item.current_status || '').trim() || null,
     }))
     .filter((item) => item.name)
+
+  const uniqueByName = new Map<string, (typeof rawPayload)[number]>()
+  for (const item of rawPayload) {
+    const key = item.name.toLowerCase()
+    const existing = uniqueByName.get(key)
+    if (!existing) {
+      uniqueByName.set(key, item)
+      continue
+    }
+    // 同名时优先保留已有 ID 的记录，避免创建重复势力
+    if (!existing.id && item.id) {
+      uniqueByName.set(key, item)
+    }
+  }
+  const payload = Array.from(uniqueByName.values())
 
   savingFactions.value = true
   editorNotice.value = ''
@@ -421,7 +436,7 @@ const removeFactionRelationship = (index: number) => {
 
 const saveFactionRelationships = async () => {
   if (!props.projectId) return
-  const payload = factionRelationships.value
+  const rawPayload = factionRelationships.value
     .map((item) => ({
       faction_from_id: Number(item.faction_from_id),
       faction_to_id: Number(item.faction_to_id),
@@ -431,6 +446,19 @@ const saveFactionRelationships = async () => {
       reason: String(item.reason || '').trim() || null,
     }))
     .filter((item) => item.faction_from_id > 0 && item.faction_to_id > 0)
+
+  const seenPairs = new Set<string>()
+  const payload = rawPayload.filter((item) => {
+    if (item.faction_from_id === item.faction_to_id) {
+      return false
+    }
+    const pairKey = `${item.faction_from_id}->${item.faction_to_id}`
+    if (seenPairs.has(pairKey)) {
+      return false
+    }
+    seenPairs.add(pairKey)
+    return true
+  })
 
   savingFactionRelationships.value = true
   editorNotice.value = ''

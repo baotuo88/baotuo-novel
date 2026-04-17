@@ -4,7 +4,7 @@
 set -e
 
 echo "========================================="
-echo "AI-Novel 一键部署脚本"
+echo "宝拓小说一键部署脚本"
 echo "========================================="
 
 # 颜色定义
@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 # 服务器信息
 SERVER_IP="45.15.185.52"
 SERVER_USER="root"
-PROJECT_DIR="/root/AI-novel"
+PROJECT_DIR="/root/baotuo-novel"
 
 echo ""
 echo "目标服务器："
@@ -63,7 +63,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-PROJECT_DIR="/root/AI-novel"
+PROJECT_DIR="/root/baotuo-novel"
 
 echo "========================================="
 echo "远程服务器部署流程"
@@ -75,8 +75,8 @@ echo "1. 检查项目目录..."
 if [ ! -d "$PROJECT_DIR" ]; then
     echo -e "${YELLOW}项目目录不存在，正在克隆仓库...${NC}"
     cd /root
-    git clone https://github.com/all666666all/AI-novel.git
-    cd AI-novel
+    git clone https://github.com/baotuo88/baotuo-novel.git
+    cd baotuo-novel
 else
     echo -e "${GREEN}✓ 项目目录存在${NC}"
     cd $PROJECT_DIR
@@ -85,8 +85,9 @@ fi
 # 2. 拉取最新代码
 echo ""
 echo "2. 拉取最新代码..."
-git fetch origin
-git reset --hard origin/main
+git fetch origin main
+git checkout main
+git pull --ff-only origin main
 echo -e "${GREEN}✓ 代码已更新到最新版本${NC}"
 
 # 3. 检查 .env 文件
@@ -141,5 +142,5 @@ echo "访问地址："
 echo "  http://$SERVER_IP"
 echo ""
 echo "查看远程日志："
-echo "  ssh $SERVER_USER@$SERVER_IP 'cd $PROJECT_DIR && docker-compose -f deploy/docker-compose.yml logs -f'"
+echo "  ssh $SERVER_USER@$SERVER_IP 'cd $PROJECT_DIR && docker compose -f deploy/docker-compose.yml logs -f'"
 echo ""

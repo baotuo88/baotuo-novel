@@ -25,6 +25,11 @@ class Settings(BaseSettings):
         env="LOGGING_LEVEL",
         description="应用日志级别",
     )
+    cors_allow_origins: str = Field(
+        default="*",
+        env="CORS_ALLOW_ORIGINS",
+        description="允许跨域来源，逗号分隔；生产环境建议使用精确域名列表",
+    )
     enable_linuxdo_login: bool = Field(
         default=False,
         env="ENABLE_LINUXDO_LOGIN",
@@ -257,6 +262,26 @@ class Settings(BaseSettings):
     def is_sqlite_backend(self) -> bool:
         """辅助属性：判断当前连接串是否指向 SQLite，用于差异化初始化流程。"""
         return make_url(self.sqlalchemy_database_uri).get_backend_name() == "sqlite"
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        """将 CORS_ALLOW_ORIGINS 解析为来源列表。"""
+        raw = (self.cors_allow_origins or "").strip()
+        if not raw:
+            if self.environment == "development":
+                return ["http://127.0.0.1:5173", "http://localhost:5173"]
+            return []
+        if raw == "*":
+            return ["*"]
+        origins: list[str] = []
+        seen: set[str] = set()
+        for item in raw.split(","):
+            origin = item.strip().rstrip("/")
+            if not origin or origin in seen:
+                continue
+            origins.append(origin)
+            seen.add(origin)
+        return origins
 
     @property
     def vector_store_enabled(self) -> bool:

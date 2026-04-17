@@ -4,7 +4,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, BigInteger, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -65,6 +77,10 @@ class NovelConversation(Base):
     """对话记录表，存储概念阶段的连续对话。"""
 
     __tablename__ = "novel_conversations"
+    __table_args__ = (
+        UniqueConstraint("project_id", "seq", name="uq_novel_conversations_project_seq"),
+        Index("ix_novel_conversations_project_seq", "project_id", "seq"),
+    )
 
     id: Mapped[int] = mapped_column(BIGINT_PK_TYPE, primary_key=True, autoincrement=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("novel_projects.id", ondelete="CASCADE"), nullable=False)
@@ -138,6 +154,10 @@ class ChapterOutline(Base):
     """章节纲要，支持 metadata 存储导演脚本/节拍状态等信息。"""
 
     __tablename__ = "chapter_outlines"
+    __table_args__ = (
+        UniqueConstraint("project_id", "chapter_number", name="uq_chapter_outlines_project_chapter"),
+        Index("ix_chapter_outlines_project_chapter", "project_id", "chapter_number"),
+    )
 
     id: Mapped[int] = mapped_column(BIGINT_PK_TYPE, primary_key=True, autoincrement=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("novel_projects.id", ondelete="CASCADE"), nullable=False)
@@ -154,6 +174,10 @@ class Chapter(Base):
     """章节正文状态，指向选中的版本。"""
 
     __tablename__ = "chapters"
+    __table_args__ = (
+        UniqueConstraint("project_id", "chapter_number", name="uq_chapters_project_chapter"),
+        Index("ix_chapters_project_chapter", "project_id", "chapter_number"),
+    )
 
     id: Mapped[int] = mapped_column(BIGINT_PK_TYPE, primary_key=True, autoincrement=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("novel_projects.id", ondelete="CASCADE"), nullable=False)
@@ -193,7 +217,9 @@ class ChapterVersion(Base):
     __tablename__ = "chapter_versions"
 
     id: Mapped[int] = mapped_column(BIGINT_PK_TYPE, primary_key=True, autoincrement=True)
-    chapter_id: Mapped[int] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
+    chapter_id: Mapped[int] = mapped_column(
+        ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     version_label: Mapped[Optional[str]] = mapped_column(String(64))
     provider: Mapped[Optional[str]] = mapped_column(String(64))
     content: Mapped[str] = mapped_column(LONG_TEXT_TYPE, nullable=False)
@@ -217,8 +243,12 @@ class ChapterEvaluation(Base):
     __tablename__ = "chapter_evaluations"
 
     id: Mapped[int] = mapped_column(BIGINT_PK_TYPE, primary_key=True, autoincrement=True)
-    chapter_id: Mapped[int] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
-    version_id: Mapped[Optional[int]] = mapped_column(ForeignKey("chapter_versions.id", ondelete="CASCADE"))
+    chapter_id: Mapped[int] = mapped_column(
+        ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("chapter_versions.id", ondelete="CASCADE"), index=True
+    )
     decision: Mapped[Optional[str]] = mapped_column(String(32))
     feedback: Mapped[Optional[str]] = mapped_column(Text)
     score: Mapped[Optional[float]] = mapped_column(Float)

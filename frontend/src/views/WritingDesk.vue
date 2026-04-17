@@ -173,6 +173,9 @@ const presetLoading = ref(false)
 const presetApplying = ref(false)
 const presetCollapseToken = ref(0)
 let chapterStatusTimer: number | null = null
+let pollingTick = 0
+const CHAPTER_STATUS_POLL_INTERVAL_MS = 5000
+const PROJECT_FULL_SYNC_INTERVAL_TICKS = 6
 
 // 计算属性
 const project = computed(() => novelStore.currentProject)
@@ -183,6 +186,12 @@ const activeWritingPreset = computed(() =>
 const selectedChapter = computed(() => {
   if (!project.value || selectedChapterNumber.value === null) return null
   return project.value.chapters.find(ch => ch.chapter_number === selectedChapterNumber.value) || null
+})
+
+const selectedChapterNeedsPolling = computed(() => {
+  const status = selectedChapter.value?.generation_status
+  if (!status) return false
+  return ['generating', 'evaluating', 'selecting', 'waiting_for_confirm'].includes(status)
 })
 
 const showVersionSelector = computed(() => {
@@ -289,7 +298,7 @@ const canGenerateChapter = (chapterNumber: number) => {
   if (!project.value?.blueprint?.chapter_outline) return false
 
   // 检查前面所有章节是否都已成功生成
-  const outlines = project.value.blueprint.chapter_outline.sort((a, b) => a.chapter_number - b.chapter_number)
+  const outlines = [...project.value.blueprint.chapter_outline].sort((a, b) => a.chapter_number - b.chapter_number)
   
   for (const outline of outlines) {
     if (outline.chapter_number >= chapterNumber) break
@@ -454,13 +463,20 @@ const stopChapterStatusPolling = () => {
     window.clearInterval(chapterStatusTimer)
     chapterStatusTimer = null
   }
+  pollingTick = 0
 }
 
 const pollProjectStatus = async () => {
+  pollingTick += 1
   try {
-    await novelStore.loadProject(props.id, true)
-    if (selectedChapterNumber.value !== null) {
+    await novelStore.refreshChapterStatuses(props.id)
+
+    if (selectedChapterNumber.value !== null && selectedChapterNeedsPolling.value) {
       await novelStore.loadChapter(selectedChapterNumber.value)
+    }
+
+    if (pollingTick % PROJECT_FULL_SYNC_INTERVAL_TICKS === 0) {
+      await novelStore.loadProject(props.id, true)
     }
     syncGenerationIndicators()
   } catch (error) {
@@ -470,9 +486,10 @@ const pollProjectStatus = async () => {
 
 const startChapterStatusPolling = () => {
   stopChapterStatusPolling()
+  pollingTick = 0
   chapterStatusTimer = window.setInterval(() => {
     void pollProjectStatus()
-  }, 5000)
+  }, CHAPTER_STATUS_POLL_INTERVAL_MS)
 }
 
 

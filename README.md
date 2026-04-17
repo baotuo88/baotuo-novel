@@ -143,6 +143,7 @@ docker compose -f deploy/docker-compose.yml ps
 | `OPENAI_API_KEY` | ✅ | 你的 LLM API Key（OpenAI 或兼容的） |
 | `OPENAI_API_BASE_URL` | ❌ | API 地址，默认是 OpenAI 官方的 |
 | `OPENAI_MODEL_NAME` | ❌ | 模型名称，默认 `gpt-4o-mini`（可按需调整） |
+| `CORS_ALLOW_ORIGINS` | ❌ | 允许跨域来源，多个域名用英文逗号分隔；生产建议配置精确域名 |
 | `APP_PORT` | ❌ | 对外访问端口，默认 `80` |
 | `ADMIN_DEFAULT_PASSWORD` | ✅ | 管理员初始密码，部署后务必修改 |
 | `ALLOW_USER_REGISTRATION` | ❌ | 是否开放注册，默认 `true` |
