@@ -50,6 +50,7 @@
           :active-preset-name="activeWritingPreset?.name || null"
           :preset-loading="presetLoading"
           :preset-applying="presetApplying"
+          :preset-collapse-token="presetCollapseToken"
           @close-sidebar="closeSidebar"
           @select-chapter="selectChapter"
           @generate-chapter="generateChapter"
@@ -170,6 +171,7 @@ const writingPresets = ref<WritingPresetItem[]>([])
 const selectedPresetId = ref('')
 const presetLoading = ref(false)
 const presetApplying = ref(false)
+const presetCollapseToken = ref(0)
 let chapterStatusTimer: number | null = null
 
 // 计算属性
@@ -387,6 +389,7 @@ const applyWritingPreset = async () => {
   try {
     await NovelAPI.setActiveWriterPreset(selectedPresetId.value || null)
     await loadWritingPresets()
+    presetCollapseToken.value += 1
     globalAlert.showSuccess('写作预设已应用', 'Preset')
   } catch (error) {
     globalAlert.showError(`预设应用失败: ${error instanceof Error ? error.message : '未知错误'}`, 'Preset')

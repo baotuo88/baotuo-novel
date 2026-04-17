@@ -44,11 +44,22 @@
             <div class="md-card md-card-outlined p-3 m3-preset-panel" style="border-radius: var(--md-radius-md);">
               <div class="flex items-center justify-between gap-2">
                 <h3 class="md-label-large font-semibold">写作预设</h3>
-                <span class="md-chip md-chip-filter" :class="{ selected: Boolean(activePresetName) }">
-                  {{ activePresetName || '未启用' }}
-                </span>
+                <div class="flex items-center gap-2">
+                  <span class="md-chip md-chip-filter" :class="{ selected: Boolean(activePresetName) }">
+                    {{ activePresetName || '未启用' }}
+                  </span>
+                  <button
+                    class="md-btn md-btn-text md-ripple m3-preset-toggle"
+                    @click="togglePresetPanel"
+                  >
+                    {{ presetCollapsed ? '展开' : '收起' }}
+                  </button>
+                </div>
               </div>
-              <div class="mt-3 flex flex-col gap-2">
+              <div v-if="presetCollapsed" class="mt-2 md-body-small md-on-surface-variant">
+                点击“展开”可切换或清空写作预设。
+              </div>
+              <div v-else class="mt-3 flex flex-col gap-2">
                 <select
                   :value="selectedPresetId"
                   class="m3-preset-select"
@@ -294,7 +305,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, nextTick } from 'vue'
+import { computed, ref, nextTick, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { globalAlert } from '@/composables/useAlert'
 import type { NovelProject, WritingPresetItem } from '@/api/novel'
@@ -312,6 +323,7 @@ interface Props {
   activePresetName?: string | null
   presetLoading?: boolean
   presetApplying?: boolean
+  presetCollapseToken?: number
 }
 
 const props = defineProps<Props>()
@@ -333,6 +345,7 @@ const selectedPresetId = computed(() => props.selectedPresetId || '')
 const activePresetName = computed(() => props.activePresetName || '')
 const presetLoading = computed(() => Boolean(props.presetLoading))
 const presetApplying = computed(() => Boolean(props.presetApplying))
+const presetCollapsed = ref(Boolean(props.activePresetName))
 
 const selectedForDeletion = ref<number[]>([])
 const listContainer = ref<HTMLElement | null>(null)
@@ -342,6 +355,32 @@ const handlePresetSelect = (event: Event) => {
   const target = event.target as HTMLSelectElement
   emit('update:selectedPresetId', target.value || '')
 }
+
+const togglePresetPanel = () => {
+  presetCollapsed.value = !presetCollapsed.value
+}
+
+watch(
+  () => props.activePresetName,
+  (next, prev) => {
+    if (!next) {
+      presetCollapsed.value = false
+      return
+    }
+    if (!prev && next) {
+      presetCollapsed.value = true
+    }
+  }
+)
+
+watch(
+  () => props.presetCollapseToken,
+  () => {
+    if (props.activePresetName) {
+      presetCollapsed.value = true
+    }
+  }
+)
 
 const characterCount = computed(() => {
   return props.project?.blueprint?.characters?.length || 0
@@ -556,6 +595,13 @@ const canGenerateChapter = (chapterNumber: number) => {
   color: var(--md-on-surface);
   padding: 0 10px;
   font-size: 13px;
+}
+
+.m3-preset-toggle {
+  min-width: 52px;
+  padding: 0 8px;
+  height: 28px;
+  font-size: 12px;
 }
 
 @media (max-height: 860px) {
