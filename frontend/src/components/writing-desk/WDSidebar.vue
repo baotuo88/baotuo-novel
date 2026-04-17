@@ -474,58 +474,77 @@ const scrollToFirstIncompleteChapter = async () => {
   }
 }
 
+const normalizeChapterNumber = (value: unknown): number | null => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const findChapterByNumber = (chapterNumber: number) => {
+  if (!props.project?.chapters) return null
+  const target = normalizeChapterNumber(chapterNumber)
+  if (target === null) return null
+  return (
+    props.project.chapters.find((ch) => normalizeChapterNumber(ch.chapter_number) === target) || null
+  )
+}
+
+const getChapterRuntimeStatus = (chapterNumber: number) => {
+  const target = normalizeChapterNumber(chapterNumber)
+  if (target === null) return 'not_generated'
+
+  const generatingTarget = normalizeChapterNumber(props.generatingChapter)
+  if (generatingTarget !== null && generatingTarget === target) {
+    return 'generating'
+  }
+
+  const evaluatingTarget = normalizeChapterNumber(props.evaluatingChapter)
+  if (evaluatingTarget !== null && evaluatingTarget === target) {
+    return 'evaluating'
+  }
+
+  return findChapterByNumber(target)?.generation_status || 'not_generated'
+}
+
 // 章节状态检查
 const isChapterCompleted = (chapterNumber: number) => {
-  if (!props.project?.chapters) return false
-  const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
-  return chapter && chapter.generation_status === 'successful'
+  return getChapterRuntimeStatus(chapterNumber) === 'successful'
 }
 
 const hasChapterInProgress = (chapterNumber: number) => {
-  if (!props.project?.chapters) return false
-  const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
-  return chapter && chapter.generation_status === 'waiting_for_confirm'
+  return getChapterRuntimeStatus(chapterNumber) === 'waiting_for_confirm'
 }
 
 const isChapterGenerating = (chapterNumber: number) => {
-  if (!props.project?.chapters) return false
-  const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
-  return chapter && chapter.generation_status === 'generating'
+  return getChapterRuntimeStatus(chapterNumber) === 'generating'
 }
 
 const isChapterEvaluating = (chapterNumber: number) => {
-  if (!props.project?.chapters) return false
-  const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
-  return chapter && chapter.generation_status === 'evaluating'
+  return getChapterRuntimeStatus(chapterNumber) === 'evaluating'
 }
 
 const isChapterFailed = (chapterNumber: number) => {
-  if (!props.project?.chapters) return false
-  const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
-  return chapter && chapter.generation_status === 'failed'
+  return getChapterRuntimeStatus(chapterNumber) === 'failed'
 }
 
 const isChapterSelecting = (chapterNumber: number) => {
-  if (!props.project?.chapters) return false
-  const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
-  return chapter && chapter.generation_status === 'selecting'
+  return getChapterRuntimeStatus(chapterNumber) === 'selecting'
 }
 
 const canGenerateChapter = (chapterNumber: number) => {
   if (!props.project?.blueprint?.chapter_outline) return false
 
-  const outlines = props.project.blueprint.chapter_outline.sort((a, b) => a.chapter_number - b.chapter_number)
+  const outlines = [...props.project.blueprint.chapter_outline].sort((a, b) => a.chapter_number - b.chapter_number)
   
   for (const outline of outlines) {
     if (outline.chapter_number >= chapterNumber) break
     
-    const chapter = props.project?.chapters.find(ch => ch.chapter_number === outline.chapter_number)
+    const chapter = findChapterByNumber(outline.chapter_number)
     if (!chapter || chapter.generation_status !== 'successful') {
       return false
     }
   }
 
-  const currentChapter = props.project?.chapters.find(ch => ch.chapter_number === chapterNumber)
+  const currentChapter = findChapterByNumber(chapterNumber)
   if (currentChapter && currentChapter.generation_status === 'successful') {
     return true
   }
