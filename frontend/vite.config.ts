@@ -25,47 +25,13 @@ export default defineConfig({
           ) {
             return 'framework'
           }
-          if (id.includes('/naive-ui/es/data-table/')) {
-            return 'naive-data-table'
-          }
-          if (
-            id.includes('/naive-ui/es/form/') ||
-            id.includes('/naive-ui/es/input/') ||
-            id.includes('/naive-ui/es/input-number/') ||
-            id.includes('/naive-ui/es/select/') ||
-            id.includes('/naive-ui/es/date-picker/') ||
-            id.includes('/naive-ui/es/switch/') ||
-            id.includes('/naive-ui/es/tabs/')
-          ) {
-            return 'naive-form'
-          }
-          if (
-            id.includes('/naive-ui/es/modal/') ||
-            id.includes('/naive-ui/es/popconfirm/') ||
-            id.includes('/naive-ui/es/alert/') ||
-            id.includes('/naive-ui/es/spin/') ||
-            id.includes('/naive-ui/es/tag/')
-          ) {
-            return 'naive-feedback'
-          }
-          if (
-            id.includes('/naive-ui/es/button/') ||
-            id.includes('/naive-ui/es/layout/') ||
-            id.includes('/naive-ui/es/menu/') ||
-            id.includes('/naive-ui/es/scrollbar/') ||
-            id.includes('/naive-ui/es/space/') ||
-            id.includes('/naive-ui/es/card/') ||
-            id.includes('/naive-ui/es/pagination/')
-          ) {
-            return 'naive-core'
-          }
           if (
             id.includes('/naive-ui/') ||
             id.includes('/vueuc/') ||
             id.includes('/vooks/') ||
             id.includes('/@css-render/')
           ) {
-            return 'naive-shared'
+            return 'naive-ui'
           }
           if (id.includes('/chart.js/')) {
             return 'charts'
