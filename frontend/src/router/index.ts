@@ -77,6 +77,39 @@ const router = createRouter({
   ],
 })
 
+const CHUNK_RELOAD_ONCE_KEY = 'baotuo_chunk_reload_once'
+
+const isChunkLoadError = (error: unknown): boolean => {
+  const message = String((error as { message?: string })?.message || error || '')
+  const lowered = message.toLowerCase()
+  return (
+    lowered.includes('failed to fetch dynamically imported module') ||
+    lowered.includes('importing a module script failed') ||
+    lowered.includes('loading chunk') ||
+    lowered.includes('chunkloaderror')
+  )
+}
+
+router.onError((error, to) => {
+  if (!isChunkLoadError(error)) {
+    return
+  }
+  const alreadyReloaded = window.sessionStorage.getItem(CHUNK_RELOAD_ONCE_KEY) === '1'
+  if (alreadyReloaded) {
+    window.sessionStorage.removeItem(CHUNK_RELOAD_ONCE_KEY)
+    console.error('动态资源加载失败且自动刷新未恢复，请手动清理浏览器缓存。', error)
+    return
+  }
+  window.sessionStorage.setItem(CHUNK_RELOAD_ONCE_KEY, '1')
+  window.location.replace(to?.fullPath || window.location.pathname)
+})
+
+router.afterEach(() => {
+  if (window.sessionStorage.getItem(CHUNK_RELOAD_ONCE_KEY) === '1') {
+    window.sessionStorage.removeItem(CHUNK_RELOAD_ONCE_KEY)
+  }
+})
+
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
   
