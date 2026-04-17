@@ -1,7 +1,7 @@
 <!-- AIMETA P=写作台头部_顶部导航栏|R=导航_操作按钮|NR=不含内容区域|E=component:WDHeader|X=ui|A=头部组件|D=vue|S=dom|RD=./README.ai -->
 <template>
   <div class="md-top-app-bar md-elevation-1 flex-shrink-0 z-30 backdrop-blur-md">
-    <div class="w-full px-4 sm:px-6 lg:px-8">
+    <div class="w-full px-4 sm:px-6 lg:px-5 xl:px-6 2xl:px-8">
       <div class="flex items-center justify-between h-16">
         <!-- 左侧：项目信息 -->
         <div class="flex items-center gap-2 sm:gap-4 min-w-0">
@@ -16,8 +16,8 @@
               <span>{{ project?.blueprint?.genre || '--' }}</span>
               <span class="hidden md:inline">•</span>
               <span class="hidden md:inline">{{ progress }}% 完成</span>
-              <span class="hidden lg:inline">•</span>
-              <span class="hidden lg:inline">{{ completedChapters }}/{{ totalChapters }} 章</span>
+              <span class="hidden xl:inline">•</span>
+              <span class="hidden xl:inline">{{ completedChapters }}/{{ totalChapters }} 章</span>
             </div>
           </div>
         </div>
@@ -46,7 +46,7 @@
           </button>
           <button
             @click="$emit('toggleSidebar')"
-            class="md-icon-btn md-ripple lg:hidden"
+            class="md-icon-btn md-ripple 2xl:hidden"
           >
             <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
               <path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"></path>
