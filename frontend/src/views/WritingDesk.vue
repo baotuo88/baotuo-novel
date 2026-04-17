@@ -127,12 +127,14 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useNovelStore } from '@/stores/novel'
+import { useAuthStore } from '@/stores/auth'
 import { NovelAPI } from '@/api/novel'
 import type {
   Chapter,
   ChapterOutline,
   ChapterGenerationResponse,
   ChapterVersion,
+  WriterTaskCenterResponse,
   WritingPresetItem,
 } from '@/api/novel'
 import { globalAlert } from '@/composables/useAlert'
@@ -152,6 +154,7 @@ interface Props {
 const props = defineProps<Props>()
 const router = useRouter()
 const novelStore = useNovelStore()
+const authStore = useAuthStore()
 
 // 状态管理
 const selectedChapterNumber = ref<number | null>(null)
@@ -174,8 +177,14 @@ const presetApplying = ref(false)
 const presetCollapseToken = ref(0)
 let chapterStatusTimer: number | null = null
 let pollingTick = 0
+let taskStreamReconnectTimer: number | null = null
+let taskStreamAbortController: AbortController | null = null
+const taskStreamConnected = ref(false)
+const taskStreamFallback = ref(false)
+const chapterQueueStateCache = new Map<number, string>()
 const CHAPTER_STATUS_POLL_INTERVAL_MS = 5000
 const PROJECT_FULL_SYNC_INTERVAL_TICKS = 6
+const TASK_STREAM_RECONNECT_DELAY_MS = 2500
 
 // 计算属性
 const project = computed(() => novelStore.currentProject)
@@ -492,6 +501,218 @@ const startChapterStatusPolling = () => {
   }, CHAPTER_STATUS_POLL_INTERVAL_MS)
 }
 
+const shouldKeepTaskStream = () => {
+  return Boolean(project.value?.id && hasActiveWriterTask.value)
+}
+
+const stopTaskStreamReconnect = () => {
+  if (taskStreamReconnectTimer != null) {
+    window.clearTimeout(taskStreamReconnectTimer)
+    taskStreamReconnectTimer = null
+  }
+}
+
+const stopTaskStream = () => {
+  stopTaskStreamReconnect()
+  if (taskStreamAbortController) {
+    taskStreamAbortController.abort()
+    taskStreamAbortController = null
+  }
+  taskStreamConnected.value = false
+  taskStreamFallback.value = false
+  chapterQueueStateCache.clear()
+}
+
+const scheduleTaskStreamReconnect = () => {
+  if (!shouldKeepTaskStream()) return
+  stopTaskStreamReconnect()
+  taskStreamReconnectTimer = window.setTimeout(() => {
+    void startTaskStream()
+  }, TASK_STREAM_RECONNECT_DELAY_MS)
+}
+
+const ensureLocalChapter = (chapterNumber: number) => {
+  if (!project.value?.chapters) {
+    return null
+  }
+  let chapter = project.value.chapters.find((item) => item.chapter_number === chapterNumber)
+  if (chapter) {
+    return chapter
+  }
+  const outline = project.value.blueprint?.chapter_outline?.find((item) => item.chapter_number === chapterNumber)
+  chapter = {
+    chapter_number: chapterNumber,
+    title: outline?.title || `第${chapterNumber}章`,
+    summary: outline?.summary || '',
+    content: null,
+    versions: null,
+    evaluation: null,
+    generation_status: 'not_generated',
+    word_count: 0
+  } as Chapter
+  project.value.chapters.push(chapter)
+  project.value.chapters.sort((a, b) => a.chapter_number - b.chapter_number)
+  return chapter
+}
+
+const parseTaskStreamEvent = (block: string): { eventName: string; data: string } | null => {
+  const lines = block.split('\n')
+  let eventName = 'message'
+  const dataLines: string[] = []
+
+  for (const line of lines) {
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim()
+      continue
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trim())
+    }
+  }
+
+  return { eventName, data: dataLines.join('\n') }
+}
+
+const applyTaskSnapshot = async (snapshot: WriterTaskCenterResponse) => {
+  if (!project.value) return
+
+  const seenChapters = new Set<number>()
+  const numbersNeedRefresh = new Set<number>()
+
+  for (const item of snapshot.items || []) {
+    const chapterNumber = item.chapter_number
+    seenChapters.add(chapterNumber)
+    const previousQueueState = chapterQueueStateCache.get(chapterNumber)
+    chapterQueueStateCache.set(chapterNumber, item.queue_state)
+
+    const chapter = ensureLocalChapter(chapterNumber)
+    if (!chapter) continue
+
+    if (item.queue_state === 'active') {
+      if (!['evaluating', 'selecting', 'waiting_for_confirm'].includes(chapter.generation_status)) {
+        chapter.generation_status = 'generating'
+      }
+      continue
+    }
+
+    if (item.queue_state === 'failed') {
+      chapter.generation_status = 'failed'
+      if (previousQueueState !== 'failed') {
+        numbersNeedRefresh.add(chapterNumber)
+      }
+      continue
+    }
+
+    if (item.queue_state === 'done' && previousQueueState !== 'done') {
+      numbersNeedRefresh.add(chapterNumber)
+    }
+  }
+
+  for (const [chapterNumber, queueState] of Array.from(chapterQueueStateCache.entries())) {
+    if (!seenChapters.has(chapterNumber)) {
+      if (queueState === 'active') {
+        numbersNeedRefresh.add(chapterNumber)
+      }
+      chapterQueueStateCache.delete(chapterNumber)
+    }
+  }
+
+  if (numbersNeedRefresh.size > 0) {
+    await novelStore.refreshChapterStatuses(props.id)
+    if (selectedChapterNumber.value != null && numbersNeedRefresh.has(selectedChapterNumber.value)) {
+      await novelStore.loadChapter(selectedChapterNumber.value)
+    }
+  }
+
+  syncGenerationIndicators()
+}
+
+const processTaskStreamEvent = async (rawEvent: string) => {
+  const parsed = parseTaskStreamEvent(rawEvent)
+  if (!parsed) return
+  if (parsed.eventName !== 'snapshot' || !parsed.data) {
+    return
+  }
+  try {
+    const payload = JSON.parse(parsed.data) as WriterTaskCenterResponse
+    await applyTaskSnapshot(payload)
+  } catch (error) {
+    console.warn('解析写作任务 SSE 数据失败:', error)
+  }
+}
+
+const startTaskStream = async () => {
+  if (!shouldKeepTaskStream()) return
+
+  stopTaskStream()
+  stopChapterStatusPolling()
+
+  if (!authStore.token) {
+    taskStreamFallback.value = true
+    startChapterStatusPolling()
+    return
+  }
+
+  const streamProjectId = project.value?.id || props.id
+  const controller = new AbortController()
+  taskStreamAbortController = controller
+
+  try {
+    const streamUrl = NovelAPI.getWriterTaskCenterStreamUrl(streamProjectId, {
+      limit: 120,
+      status_group: 'all',
+      interval_seconds: 3,
+    })
+    const response = await fetch(streamUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${authStore.token}`,
+        Accept: 'text/event-stream',
+      },
+      signal: controller.signal,
+    })
+
+    if (!response.ok || !response.body) {
+      throw new Error(`实时任务流连接失败，状态码: ${response.status}`)
+    }
+
+    taskStreamConnected.value = true
+    taskStreamFallback.value = false
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (shouldKeepTaskStream() && !controller.signal.aborted) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let delimiterIndex = buffer.indexOf('\n\n')
+      while (delimiterIndex >= 0) {
+        const rawEvent = buffer.slice(0, delimiterIndex).trim()
+        buffer = buffer.slice(delimiterIndex + 2)
+        if (rawEvent) {
+          await processTaskStreamEvent(rawEvent)
+        }
+        delimiterIndex = buffer.indexOf('\n\n')
+      }
+    }
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      console.warn('写作任务实时流中断，回退轮询:', error)
+      taskStreamConnected.value = false
+      taskStreamFallback.value = true
+      startChapterStatusPolling()
+      scheduleTaskStreamReconnect()
+    }
+  } finally {
+    if (taskStreamAbortController === controller) {
+      taskStreamAbortController = null
+      taskStreamConnected.value = false
+    }
+  }
+}
+
 
 // 显示版本详情
 const showVersionDetail = (versionIndex: number) => {
@@ -766,8 +987,9 @@ watch(
   () => hasActiveWriterTask.value,
   (active) => {
     if (active) {
-      startChapterStatusPolling()
+      void startTaskStream()
     } else {
+      stopTaskStream()
       stopChapterStatusPolling()
     }
   },
@@ -775,6 +997,7 @@ watch(
 )
 
 onUnmounted(() => {
+  stopTaskStream()
   stopChapterStatusPolling()
   document.body.classList.remove('m3-novel')
 })

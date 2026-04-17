@@ -13,6 +13,40 @@ export default defineConfig({
     vueJsx(),
     vueDevTools(),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (
+            id.includes('/vue/') ||
+            id.includes('/pinia/') ||
+            id.includes('/vue-router/')
+          ) {
+            return 'framework'
+          }
+          if (
+            id.includes('/naive-ui/') ||
+            id.includes('/vueuc/') ||
+            id.includes('/vooks/') ||
+            id.includes('/@css-render/')
+          ) {
+            return 'naive-ui'
+          }
+          if (id.includes('/chart.js/')) {
+            return 'charts'
+          }
+          if (id.includes('/@headlessui/')) {
+            return 'headlessui'
+          }
+          if (id.includes('/marked/')) {
+            return 'markdown'
+          }
+          return 'vendor'
+        }
+      }
+    }
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url))

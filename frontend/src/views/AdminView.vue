@@ -1,99 +1,101 @@
 <!-- AIMETA P=管理后台_管理员控制台|R=管理面板_子组件切换|NR=不含普通用户功能|E=route:/admin#component:AdminView|X=ui|A=管理面板|D=vue|S=dom,net|RD=./README.ai -->
 <template>
   <div class="platform-shell admin-shell">
-    <n-layout has-sider class="admin-layout page-enter">
-      <n-layout-sider
-        collapse-mode="width"
-        :collapsed="collapsed"
-        :collapsed-width="72"
-        :width="260"
-        bordered
-        show-trigger
-        @collapse="collapsed = true"
-        @expand="collapsed = false"
-      >
-        <div class="sider-header">
-          <div class="platform-brand-mark admin-mark" v-if="!collapsed">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-            </svg>
-          </div>
-          <span class="logo" v-if="!collapsed">宝拓小说 管理台</span>
-          <span class="logo-small" v-else>管理</span>
-        </div>
-
-        <n-menu
-          :value="activeKey"
-          :options="menuOptions"
+    <n-message-provider>
+      <n-layout has-sider class="admin-layout page-enter">
+        <n-layout-sider
+          collapse-mode="width"
           :collapsed="collapsed"
           :collapsed-width="72"
-          :accordion="true"
-          @update:value="handleMenuSelect"
-        />
-      </n-layout-sider>
-
-      <n-layout>
-        <n-layout-header class="admin-header">
-          <div class="admin-header-stack">
-            <div class="admin-header-toolbar">
-              <n-button
-                class="mobile-trigger"
-                quaternary
-                circle
-                size="small"
-                @click="collapsed = !collapsed"
-              >
-                <template #icon>
-                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-                  </svg>
-                </template>
-              </n-button>
-              <span class="admin-mobile-title">{{ currentMenuLabel }}</span>
+          :width="260"
+          bordered
+          show-trigger
+          @collapse="collapsed = true"
+          @expand="collapsed = false"
+        >
+          <div class="sider-header">
+            <div class="platform-brand-mark admin-mark" v-if="!collapsed">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+              </svg>
             </div>
+            <span class="logo" v-if="!collapsed">宝拓小说 管理台</span>
+            <span class="logo-small" v-else>管理</span>
+          </div>
 
-            <div class="admin-header-hero">
-              <div class="admin-title-group">
-                <p class="admin-title-eyebrow">管理员控制台</p>
-                <h1 class="admin-title">{{ currentMenuLabel }}</h1>
-                <p class="admin-title-subtitle">{{ currentMenuDescription }}</p>
-                <div class="admin-meta-row">
-                  <span class="md-chip md-chip-assist">模块 {{ menuOptions.length }}</span>
-                  <span class="md-chip md-chip-assist">{{ currentDateLabel }}</span>
-                </div>
+          <n-menu
+            :value="activeKey"
+            :options="menuOptions"
+            :collapsed="collapsed"
+            :collapsed-width="72"
+            :accordion="true"
+            @update:value="handleMenuSelect"
+          />
+        </n-layout-sider>
+
+        <n-layout>
+          <n-layout-header class="admin-header">
+            <div class="admin-header-stack">
+              <div class="admin-header-toolbar">
+                <n-button
+                  class="mobile-trigger"
+                  quaternary
+                  circle
+                  size="small"
+                  @click="collapsed = !collapsed"
+                >
+                  <template #icon>
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                  </template>
+                </n-button>
+                <span class="admin-mobile-title">{{ currentMenuLabel }}</span>
               </div>
 
-              <n-space class="admin-header-actions" :size="10">
-                <n-button size="small" tertiary type="primary" @click="handleMenuSelect('statistics')">
-                  返回总览
-                </n-button>
-                <n-button size="small" type="primary" ghost :disabled="mustChangePassword" @click="goBack">
-                  {{ mustChangePassword ? '请先修改密码' : '返回业务系统' }}
-                </n-button>
-              </n-space>
-            </div>
+              <div class="admin-header-hero">
+                <div class="admin-title-group">
+                  <p class="admin-title-eyebrow">管理员控制台</p>
+                  <h1 class="admin-title">{{ currentMenuLabel }}</h1>
+                  <p class="admin-title-subtitle">{{ currentMenuDescription }}</p>
+                  <div class="admin-meta-row">
+                    <span class="md-chip md-chip-assist">模块 {{ menuOptions.length }}</span>
+                    <span class="md-chip md-chip-assist">{{ currentDateLabel }}</span>
+                  </div>
+                </div>
 
-            <div class="admin-header-metrics">
-              <MetricCard
-                v-for="item in quickMetrics"
-                :key="item.label"
-                :label="item.label"
-                :value="item.value"
-                :hint="item.hint"
-                compact
-              />
+                <n-space class="admin-header-actions" :size="10">
+                  <n-button size="small" tertiary type="primary" @click="handleMenuSelect('statistics')">
+                    返回总览
+                  </n-button>
+                  <n-button size="small" type="primary" ghost :disabled="mustChangePassword" @click="goBack">
+                    {{ mustChangePassword ? '请先修改密码' : '返回业务系统' }}
+                  </n-button>
+                </n-space>
+              </div>
+
+              <div class="admin-header-metrics">
+                <MetricCard
+                  v-for="item in quickMetrics"
+                  :key="item.label"
+                  :label="item.label"
+                  :value="item.value"
+                  :hint="item.hint"
+                  compact
+                />
+              </div>
             </div>
-          </div>
-        </n-layout-header>
-        <n-layout-content class="admin-content">
-          <n-scrollbar class="content-scroll">
-            <div class="content-inner">
-              <component :is="activeComponent" />
-            </div>
-          </n-scrollbar>
-        </n-layout-content>
+          </n-layout-header>
+          <n-layout-content class="admin-content">
+            <n-scrollbar class="content-scroll">
+              <div class="content-inner">
+                <component :is="activeComponent" />
+              </div>
+            </n-scrollbar>
+          </n-layout-content>
+        </n-layout>
       </n-layout>
-    </n-layout>
+    </n-message-provider>
   </div>
 </template>
 
@@ -105,6 +107,7 @@ import {
   NLayoutContent,
   NLayoutHeader,
   NLayoutSider,
+  NMessageProvider,
   NMenu,
   NScrollbar,
   NSpace,
