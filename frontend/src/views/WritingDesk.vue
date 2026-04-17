@@ -12,41 +12,6 @@
       @open-task-center="showTaskCenter = true"
     />
 
-    <div v-if="project" class="px-4 sm:px-6 lg:px-8 pt-4">
-      <div class="md-card md-card-filled preset-bar">
-        <div class="preset-summary">
-          <div class="preset-title-row">
-            <div class="preset-title">写作 Preset</div>
-            <span v-if="activeWritingPreset" class="preset-state-chip">已启用</span>
-            <span v-else class="preset-state-chip muted">未启用</span>
-          </div>
-          <div class="preset-desc">在此选择并应用写作风格预设。</div>
-        </div>
-        <div class="preset-actions">
-          <select id="writing-preset-select" v-model="selectedPresetId" class="preset-select">
-            <option value="">不使用预设</option>
-            <option v-for="item in writingPresets" :key="item.preset_id" :value="item.preset_id">
-              {{ item.name }}
-            </option>
-          </select>
-          <button
-            class="md-btn md-btn-tonal md-ripple"
-            :disabled="presetApplying || presetLoading"
-            @click="applyWritingPreset"
-          >
-            {{ presetApplying ? '应用中...' : '应用' }}
-          </button>
-          <button
-            class="md-btn md-btn-text md-ripple"
-            :disabled="presetApplying || presetLoading"
-            @click="clearWritingPreset"
-          >
-            清空
-          </button>
-        </div>
-      </div>
-    </div>
-
     <!-- 主要内容区域 -->
     <div class="flex-1 min-h-0 w-full px-4 sm:px-6 lg:px-8 py-6 overflow-hidden">
       <!-- 加载状态 -->
@@ -80,12 +45,20 @@
           :generating-chapter="generatingChapter"
           :evaluating-chapter="evaluatingChapter"
           :is-generating-outline="isGeneratingOutline"
+          :writing-presets="writingPresets"
+          :selected-preset-id="selectedPresetId"
+          :active-preset-name="activeWritingPreset?.name || null"
+          :preset-loading="presetLoading"
+          :preset-applying="presetApplying"
           @close-sidebar="closeSidebar"
           @select-chapter="selectChapter"
           @generate-chapter="generateChapter"
           @edit-chapter="openEditChapterModal"
           @delete-chapter="deleteChapter"
           @generate-outline="generateOutline"
+          @update:selected-preset-id="selectedPresetId = $event"
+          @apply-preset="applyWritingPreset"
+          @clear-preset="clearWritingPreset"
         />
 
         <div class="flex-1 min-w-0 min-h-0">
@@ -162,7 +135,6 @@ import type {
   WritingPresetItem,
 } from '@/api/novel'
 import { globalAlert } from '@/composables/useAlert'
-import Tooltip from '@/components/Tooltip.vue'
 import WDHeader from '@/components/writing-desk/WDHeader.vue'
 import WDSidebar from '@/components/writing-desk/WDSidebar.vue'
 import WDWorkspace from '@/components/writing-desk/WDWorkspace.vue'
@@ -831,90 +803,6 @@ onUnmounted(() => {
   color: var(--md-on-surface);
   font-family: var(--md-font-family);
   animation: m3-fade 0.6s ease-out both;
-}
-
-.preset-bar {
-  border-radius: var(--md-radius-lg);
-  padding: 12px 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.preset-summary {
-  min-width: 0;
-}
-
-.preset-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--md-on-surface);
-}
-
-.preset-title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.preset-desc {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--md-on-surface-variant);
-}
-
-.preset-state-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 20px;
-  padding: 0 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--md-on-secondary-container);
-  background: color-mix(in srgb, var(--md-secondary-container) 90%, white 10%);
-}
-
-.preset-state-chip.muted {
-  color: var(--md-on-surface-variant);
-  background: color-mix(in srgb, var(--md-outline-variant) 60%, white 40%);
-}
-
-.preset-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.preset-select {
-  min-width: 220px;
-  height: 34px;
-  border: 1px solid var(--md-outline);
-  border-radius: 10px;
-  background: var(--md-surface);
-  color: var(--md-on-surface);
-  padding: 0 10px;
-  font-size: 13px;
-}
-
-@media (max-width: 900px) {
-  .preset-bar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .preset-actions {
-    justify-content: flex-start;
-  }
-
-  .preset-select {
-    min-width: 0;
-    width: 100%;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

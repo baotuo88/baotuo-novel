@@ -41,6 +41,42 @@
                 <p class="md-body-small line-clamp-3" style="color: var(--md-on-surface-variant);">{{ project.blueprint?.one_sentence_summary || '暂无概要' }}</p>
               </Tooltip>
             </div>
+            <div class="md-card md-card-outlined p-3 m3-preset-panel" style="border-radius: var(--md-radius-md);">
+              <div class="flex items-center justify-between gap-2">
+                <h3 class="md-label-large font-semibold">写作预设</h3>
+                <span class="md-chip md-chip-filter" :class="{ selected: Boolean(activePresetName) }">
+                  {{ activePresetName || '未启用' }}
+                </span>
+              </div>
+              <div class="mt-3 flex flex-col gap-2">
+                <select
+                  :value="selectedPresetId"
+                  class="m3-preset-select"
+                  @change="handlePresetSelect"
+                >
+                  <option value="">不使用预设</option>
+                  <option v-for="item in writingPresets" :key="item.preset_id" :value="item.preset_id">
+                    {{ item.name }}
+                  </option>
+                </select>
+                <div class="flex items-center gap-2">
+                  <button
+                    class="md-btn md-btn-tonal md-ripple flex-1"
+                    :disabled="presetApplying || presetLoading"
+                    @click="$emit('applyPreset')"
+                  >
+                    {{ presetApplying ? '应用中...' : '应用' }}
+                  </button>
+                  <button
+                    class="md-btn md-btn-text md-ripple"
+                    :disabled="presetApplying || presetLoading"
+                    @click="$emit('clearPreset')"
+                  >
+                    清空
+                  </button>
+                </div>
+              </div>
+            </div>
             <div class="grid grid-cols-2 gap-2 text-xs">
               <div class="md-card md-card-outlined p-2 text-center" style="border-radius: var(--md-radius-md);">
                 <div class="md-title-small font-semibold" style="color: var(--md-primary);">{{ characterCount }}</div>
@@ -261,7 +297,7 @@
 import { computed, ref, nextTick } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { globalAlert } from '@/composables/useAlert'
-import type { NovelProject } from '@/api/novel'
+import type { NovelProject, WritingPresetItem } from '@/api/novel'
 import Tooltip from '@/components/Tooltip.vue'
 
 interface Props {
@@ -271,15 +307,41 @@ interface Props {
   generatingChapter: number | null
   evaluatingChapter: number | null
   isGeneratingOutline: boolean
+  writingPresets?: WritingPresetItem[]
+  selectedPresetId?: string
+  activePresetName?: string | null
+  presetLoading?: boolean
+  presetApplying?: boolean
 }
 
 const props = defineProps<Props>()
 
-const emit = defineEmits(['closeSidebar', 'selectChapter', 'generateChapter', 'editChapter', 'deleteChapter', 'generateOutline'])
+const emit = defineEmits([
+  'closeSidebar',
+  'selectChapter',
+  'generateChapter',
+  'editChapter',
+  'deleteChapter',
+  'generateOutline',
+  'update:selectedPresetId',
+  'applyPreset',
+  'clearPreset',
+])
+
+const writingPresets = computed(() => props.writingPresets || [])
+const selectedPresetId = computed(() => props.selectedPresetId || '')
+const activePresetName = computed(() => props.activePresetName || '')
+const presetLoading = computed(() => Boolean(props.presetLoading))
+const presetApplying = computed(() => Boolean(props.presetApplying))
 
 const selectedForDeletion = ref<number[]>([])
 const listContainer = ref<HTMLElement | null>(null)
 const chapterRefs = ref<Record<number, HTMLElement | null>>({})
+
+const handlePresetSelect = (event: Event) => {
+  const target = event.target as HTMLSelectElement
+  emit('update:selectedPresetId', target.value || '')
+}
 
 const characterCount = computed(() => {
   return props.project?.blueprint?.characters?.length || 0
@@ -478,6 +540,22 @@ const canGenerateChapter = (chapterNumber: number) => {
 .m3-chapter-action-btn svg {
   width: 14px;
   height: 14px;
+}
+
+.m3-preset-panel {
+  border-color: var(--md-outline-variant);
+  background: color-mix(in srgb, var(--md-surface-container-low) 75%, white 25%);
+}
+
+.m3-preset-select {
+  width: 100%;
+  height: 34px;
+  border: 1px solid var(--md-outline);
+  border-radius: 10px;
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  padding: 0 10px;
+  font-size: 13px;
 }
 
 @keyframes m3-rise {
