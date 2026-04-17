@@ -24,6 +24,23 @@
 
         <!-- 右侧：操作按钮 -->
         <div class="flex items-center gap-1 sm:gap-2">
+          <div
+            v-if="showTaskSync"
+            class="m3-task-sync-chip hidden md:flex"
+            :class="taskSyncConnected ? 'is-ok' : 'is-warn'"
+          >
+            <span class="m3-task-sync-dot"></span>
+            <span class="m3-task-sync-text">{{ taskSyncStatusText }}</span>
+            <span class="m3-task-sync-detail hidden xl:inline">{{ taskSyncDetailText }}</span>
+            <button
+              v-if="showReconnectAction"
+              class="md-btn md-btn-text md-ripple m3-task-sync-reconnect"
+              :disabled="taskReconnectLoading"
+              @click="$emit('reconnectTaskSync')"
+            >
+              {{ taskReconnectLoading ? '重连中...' : '重连' }}
+            </button>
+          </div>
           <button @click="$emit('openTaskCenter')" class="md-btn md-btn-text md-ripple flex items-center gap-2">
             <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
               <path fill-rule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v2a1 1 0 102 0V6h12v8h-3a1 1 0 100 2h3a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm-1 9a3 3 0 016 0v4a3 3 0 11-6 0v-4zm2 0v4a1 1 0 102 0v-4a1 1 0 10-2 0z" clip-rule="evenodd"></path>
@@ -76,9 +93,74 @@ interface Props {
   progress: number
   completedChapters: number
   totalChapters: number
+  showTaskSync: boolean
+  taskSyncConnected: boolean
+  taskSyncStatusText: string
+  taskSyncDetailText: string
+  taskReconnectLoading: boolean
+  showReconnectAction: boolean
 }
 
 defineProps<Props>()
 
-defineEmits(['goBack', 'viewProjectDetail', 'toggleSidebar', 'openTaskCenter'])
+defineEmits([
+  'goBack',
+  'viewProjectDetail',
+  'toggleSidebar',
+  'openTaskCenter',
+  'reconnectTaskSync',
+])
 </script>
+
+<style scoped>
+.m3-task-sync-chip {
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 5px 10px;
+  border: 1px solid var(--md-outline-variant);
+  background: color-mix(in srgb, var(--md-surface-container-low) 84%, white 16%);
+  max-width: min(40vw, 420px);
+}
+
+.m3-task-sync-chip.is-ok {
+  border-color: color-mix(in srgb, var(--md-success) 22%, var(--md-outline-variant) 78%);
+}
+
+.m3-task-sync-chip.is-warn {
+  border-color: color-mix(in srgb, var(--md-warning) 26%, var(--md-outline-variant) 74%);
+}
+
+.m3-task-sync-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--md-success);
+}
+
+.m3-task-sync-chip.is-warn .m3-task-sync-dot {
+  background: var(--md-warning);
+}
+
+.m3-task-sync-text {
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.m3-task-sync-detail {
+  font-size: 0.74rem;
+  color: var(--md-on-surface-variant);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.m3-task-sync-reconnect {
+  min-height: auto;
+  padding: 2px 6px;
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+</style>

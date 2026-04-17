@@ -6,10 +6,17 @@
       :progress="progress"
       :completed-chapters="completedChapters"
       :total-chapters="totalChapters"
+      :show-task-sync="showTaskSyncBanner"
+      :task-sync-connected="taskStreamConnected"
+      :task-sync-status-text="taskSyncStatusText"
+      :task-sync-detail-text="taskSyncDetailText"
+      :task-reconnect-loading="manualReconnectLoading"
+      :show-reconnect-action="!taskStreamConnected && hasActiveWriterTask"
       @go-back="goBack"
       @view-project-detail="viewProjectDetail"
       @toggle-sidebar="toggleSidebar"
       @open-task-center="showTaskCenter = true"
+      @reconnect-task-sync="reconnectTaskStreamManually"
     />
 
     <!-- 主要内容区域 -->
@@ -38,22 +45,6 @@
 
       <!-- 主要内容 -->
       <div v-else-if="project" class="h-full min-h-0 flex flex-col gap-3">
-        <div v-if="showTaskSyncBanner" :class="['task-sync-banner', taskSyncBannerClass]">
-          <div class="task-sync-main">
-            <span :class="['task-sync-dot', taskSyncDotClass]"></span>
-            <span class="task-sync-title">{{ taskSyncStatusText }}</span>
-            <span class="task-sync-detail">{{ taskSyncDetailText }}</span>
-          </div>
-          <button
-            v-if="!taskStreamConnected"
-            class="md-btn md-btn-text md-ripple task-sync-action"
-            :disabled="manualReconnectLoading"
-            @click="reconnectTaskStreamManually"
-          >
-            {{ manualReconnectLoading ? '重连中...' : '立即重连' }}
-          </button>
-        </div>
-
         <div class="flex-1 min-h-0 flex gap-4 lg:gap-5 xl:gap-6">
           <WDSidebar
             :project="project"
@@ -269,14 +260,6 @@ const hasActiveWriterTask = computed(() => {
 })
 
 const showTaskSyncBanner = computed(() => hasActiveWriterTask.value)
-
-const taskSyncBannerClass = computed(() => {
-  return taskStreamConnected.value ? 'task-sync-ok' : 'task-sync-warn'
-})
-
-const taskSyncDotClass = computed(() => {
-  return taskStreamConnected.value ? 'task-sync-dot-ok' : 'task-sync-dot-warn'
-})
 
 const taskSyncStatusText = computed(() => {
   if (taskStreamConnected.value) {
@@ -1135,79 +1118,6 @@ onUnmounted(() => {
 @media (prefers-reduced-motion: reduce) {
   .m3-shell {
     animation: none;
-  }
-}
-
-.task-sync-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-radius: var(--md-radius-md);
-  border: 1px solid var(--md-outline-variant);
-  padding: 10px 14px;
-  backdrop-filter: blur(8px);
-}
-
-.task-sync-ok {
-  background: color-mix(in srgb, var(--md-success-container) 58%, white 42%);
-  border-color: color-mix(in srgb, var(--md-success) 24%, var(--md-outline-variant) 76%);
-}
-
-.task-sync-warn {
-  background: color-mix(in srgb, var(--md-warning-container) 72%, white 28%);
-  border-color: color-mix(in srgb, var(--md-warning) 24%, var(--md-outline-variant) 76%);
-}
-
-.task-sync-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
-.task-sync-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  flex-shrink: 0;
-}
-
-.task-sync-dot-ok {
-  background: var(--md-success);
-  box-shadow: 0 0 0 5px color-mix(in srgb, var(--md-success) 18%, transparent 82%);
-}
-
-.task-sync-dot-warn {
-  background: var(--md-warning);
-  box-shadow: 0 0 0 5px color-mix(in srgb, var(--md-warning) 24%, transparent 76%);
-}
-
-.task-sync-title {
-  font-weight: 600;
-  font-size: 0.86rem;
-  color: var(--md-on-surface);
-}
-
-.task-sync-detail {
-  font-size: 0.78rem;
-  color: var(--md-on-surface-variant);
-}
-
-.task-sync-action {
-  flex-shrink: 0;
-  font-size: 0.78rem;
-}
-
-@media (max-width: 640px) {
-  .task-sync-banner {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .task-sync-action {
-    padding-left: 0;
   }
 }
 
