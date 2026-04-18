@@ -246,12 +246,14 @@ watch(
 
 <style scoped>
 .admin-shell {
-  padding: 16px;
+  padding: var(--app-gutter-x);
 }
 
 .admin-layout {
-  height: calc(100vh - 32px);
-  height: calc(100dvh - 32px);
+  height: calc(100vh - (2 * var(--app-gutter-x)));
+  height: calc(100dvh - (2 * var(--app-gutter-x)));
+  max-width: var(--app-page-max-wide);
+  margin: 0 auto;
   border-radius: 26px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 82%, transparent);
@@ -294,7 +296,7 @@ watch(
 .admin-header {
   background: transparent;
   border-bottom: none;
-  padding: 16px 20px 0;
+  padding: 14px 18px 0;
 }
 
 .admin-header-stack {
@@ -380,7 +382,7 @@ watch(
   background:
     radial-gradient(640px 200px at 10% -10%, color-mix(in srgb, var(--md-primary-container) 48%, transparent), transparent 70%),
     linear-gradient(140deg, #f4f8ff 0%, #f7faff 54%, #eef7f4 100%);
-  padding: 16px 20px 22px;
+  padding: 14px 16px 18px;
   display: flex;
   min-height: 0;
 }
@@ -394,6 +396,8 @@ watch(
 
 .content-inner {
   padding-right: 4px;
+  max-width: var(--app-page-max-wide);
+  margin: 0 auto;
 }
 
 .mobile-trigger {
@@ -428,7 +432,7 @@ watch(
 :deep(.admin-content .novel-management-card),
 :deep(.admin-content .password-card),
 :deep(.admin-content .admin-settings > .n-card) {
-  border-radius: 18px;
+  border-radius: 16px;
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 82%, transparent);
   background: color-mix(in srgb, var(--md-surface) 95%, #ffffff 5%);
   box-shadow: var(--md-elevation-1);
@@ -492,7 +496,7 @@ watch(
 }
 
 :deep(.admin-content .n-button) {
-  border-radius: 12px;
+  border-radius: 10px;
   font-weight: 600;
 }
 

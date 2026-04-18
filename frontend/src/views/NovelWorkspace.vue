@@ -1,6 +1,6 @@
 <!-- AIMETA P=小说工作区_小说列表管理|R=小说列表_创建|NR=不含章节编辑|E=route:/workspace#component:NovelWorkspace|X=ui|A=工作区|D=vue|S=dom,net|RD=./README.ai -->
 <template>
-  <div class="flex items-center justify-center min-h-[100dvh] p-4 md-surface-dim">
+  <div class="platform-shell workspace-shell">
     <!-- Material 3 Snackbar for delete message -->
     <transition
       enter-active-class="transition-all duration-300"
@@ -35,12 +35,15 @@
       </div>
     </transition>
     
-    <div class="w-full max-w-7xl mx-auto">
-      <div class="md-card md-card-elevated p-8 fade-in" style="border-radius: var(--md-radius-xl);">
+    <div class="platform-container workspace-container page-enter">
+      <div class="workspace-main-card md-card md-card-elevated p-6 lg:p-8" style="border-radius: var(--md-radius-xl);">
         <!-- Header -->
-        <div class="flex justify-between items-center mb-8">
-          <div class="flex items-center gap-4">
+        <div class="workspace-header mb-8">
+          <div class="workspace-title-wrap">
             <h2 class="md-headline-medium" style="color: var(--md-on-surface);">我的小说项目</h2>
+            <p class="md-body-small workspace-subtitle">统一管理项目、导入文本、查看创作进度。</p>
+          </div>
+          <div class="workspace-header-actions">
             <router-link 
               v-if="authStore.user?.is_admin" 
               to="/admin" 
@@ -52,16 +55,16 @@
               </svg>
               管理后台
             </router-link>
+            <button
+              @click="goBack"
+              class="md-btn md-btn-text md-ripple"
+            >
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+              </svg>
+              返回
+            </button>
           </div>
-          <button
-            @click="goBack"
-            class="md-btn md-btn-text md-ripple"
-          >
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-            返回
-          </button>
         </div>
 
         <!-- Loading State -->
@@ -349,3 +352,52 @@ onMounted(() => {
   loadProjects()
 })
 </script>
+
+<style scoped>
+.workspace-shell {
+  position: relative;
+}
+
+.workspace-container {
+  max-width: var(--app-page-max-wide);
+}
+
+.workspace-main-card {
+  background:
+    radial-gradient(640px 220px at -10% -30%, color-mix(in srgb, var(--md-primary-container) 48%, transparent), transparent 74%),
+    radial-gradient(540px 200px at 108% -20%, color-mix(in srgb, var(--md-secondary-container) 44%, transparent), transparent 72%),
+    color-mix(in srgb, var(--md-surface) 95%, #ffffff 5%);
+  border-color: color-mix(in srgb, var(--md-outline-variant) 82%, transparent);
+}
+
+.workspace-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.workspace-title-wrap {
+  min-width: 0;
+}
+
+.workspace-subtitle {
+  margin-top: 6px;
+  color: var(--md-on-surface-variant);
+}
+
+.workspace-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .workspace-header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+</style>

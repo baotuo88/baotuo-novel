@@ -20,7 +20,7 @@
     />
 
     <!-- 主要内容区域 -->
-    <div class="flex-1 min-h-0 w-full px-4 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 py-6 overflow-hidden">
+    <div class="desk-content-frame flex-1 min-h-0 w-full px-4 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 py-6 overflow-hidden">
       <!-- 加载状态 -->
       <div v-if="novelStore.isLoading" class="h-full flex justify-center items-center">
         <div class="text-center">
@@ -1168,8 +1168,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
-
 :global(body.m3-novel) {
   --md-font-family: 'Manrope', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', sans-serif;
   --md-primary: #2563eb;
@@ -1203,10 +1201,17 @@ onUnmounted(() => {
   font-family: var(--md-font-family);
 }
 
+.desk-content-frame {
+  max-width: var(--app-page-max-wide);
+  margin: 0 auto;
+}
+
 .m3-shell {
-  background: radial-gradient(1200px 600px at 15% -20%, rgba(37, 99, 235, 0.16), transparent 60%),
-    radial-gradient(900px 420px at 85% 0%, rgba(45, 212, 191, 0.12), transparent 55%),
-    linear-gradient(140deg, #f8fafc 0%, #eef2ff 45%, #ecfeff 100%);
+  position: relative;
+  background:
+    radial-gradient(1200px 600px at 15% -20%, rgba(37, 99, 235, 0.14), transparent 62%),
+    radial-gradient(900px 420px at 85% 0%, rgba(45, 212, 191, 0.1), transparent 58%),
+    linear-gradient(140deg, #f8fafc 0%, #eef2ff 45%, #edf8ff 100%);
   color: var(--md-on-surface);
   font-family: var(--md-font-family);
   animation: m3-fade 0.6s ease-out both;

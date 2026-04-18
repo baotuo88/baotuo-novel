@@ -1,7 +1,7 @@
 /* AIMETA P=主CSS_全局样式和Tailwind导入|R=全局样式_Tailwind|NR=不含组件样式|E=-|X=internal|A=全局样式|D=tailwindcss|S=dom|RD=./README.ai */
 @import "tailwindcss";
 /* Editorial + Product Font Pair */
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 @plugin "@tailwindcss/typography";
 
@@ -74,34 +74,42 @@
   --md-on-warning: #1f2937;
   --md-on-warning-container: #78350f;
 
+  /* Page Layout */
+  --app-page-max: 1440px;
+  --app-page-max-wide: 1720px;
+  --app-page-max-readable: 1200px;
+  --app-gutter-x: clamp(14px, 2vw, 28px);
+  --app-gutter-y: clamp(16px, 2.2vw, 30px);
+  --app-section-gap: clamp(14px, 2vw, 24px);
+
   /* Typography Scale */
   --md-font-family: 'Manrope', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --md-font-mono: 'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace;
   
   /* Display */
-  --md-display-large: 3.5rem;
-  --md-display-medium: 2.75rem;
-  --md-display-small: 2.25rem;
+  --md-display-large: clamp(2.3rem, 4.2vw, 3.4rem);
+  --md-display-medium: clamp(2rem, 3.2vw, 2.7rem);
+  --md-display-small: clamp(1.62rem, 2.6vw, 2.2rem);
   
   /* Headline */
-  --md-headline-large: 2rem;
-  --md-headline-medium: 1.75rem;
-  --md-headline-small: 1.375rem;
+  --md-headline-large: clamp(1.52rem, 2.2vw, 1.95rem);
+  --md-headline-medium: clamp(1.34rem, 1.8vw, 1.72rem);
+  --md-headline-small: clamp(1.2rem, 1.45vw, 1.35rem);
   
   /* Title */
-  --md-title-large: 1.35rem;
-  --md-title-medium: 1.02rem;
-  --md-title-small: 0.88rem;
+  --md-title-large: 1.28rem;
+  --md-title-medium: 1.06rem;
+  --md-title-small: 0.9rem;
   
   /* Body */
   --md-body-large: 1rem;
-  --md-body-medium: 0.92rem;
-  --md-body-small: 0.79rem;
+  --md-body-medium: 0.96rem;
+  --md-body-small: 0.84rem;
   
   /* Label */
-  --md-label-large: 0.88rem;
-  --md-label-medium: 0.76rem;
-  --md-label-small: 0.68rem;
+  --md-label-large: 0.9rem;
+  --md-label-medium: 0.8rem;
+  --md-label-small: 0.72rem;
   
   /* Elevation (Shadow) */
   --md-elevation-0: none;
@@ -155,6 +163,7 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -162,7 +171,7 @@ body {
   min-height: 100dvh;
   font-family: var(--md-font-family);
   font-size: var(--md-body-medium);
-  line-height: 1.58;
+  line-height: 1.62;
   color: var(--md-on-background);
   background:
     radial-gradient(1200px 600px at -8% -22%, rgba(29, 78, 216, 0.14), transparent 62%),
@@ -175,6 +184,41 @@ body {
 ::selection {
   background: color-mix(in srgb, var(--md-primary-container) 86%, white 14%);
   color: var(--md-on-primary-container);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  color: var(--md-on-surface);
+  font-weight: 700;
+  letter-spacing: -0.012em;
+  line-height: 1.28;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+input,
+textarea,
+select,
+button {
+  font-family: var(--md-font-family);
+}
+
+button,
+a[href],
+[role='button'] {
+  cursor: pointer;
+}
+
+@media (max-width: 768px) {
+  html {
+    font-size: 15px;
+  }
 }
 
 /* ============================================
@@ -287,8 +331,8 @@ body {
   align-items: center;
   justify-content: center;
   gap: 9px;
-  min-height: 42px;
-  padding: 0 22px;
+  min-height: 44px;
+  padding: 0 20px;
   border: 1px solid transparent;
   border-radius: var(--md-radius-full);
   font-family: var(--md-font-family);
@@ -399,8 +443,8 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   padding: 8px;
   border: 1px solid transparent;
   border-radius: var(--md-radius-full);
@@ -466,7 +510,7 @@ body {
    ============================================ */
 .md-card {
   background-color: color-mix(in srgb, var(--md-surface) 92%, #ffffff 8%);
-  border-radius: var(--md-radius-md);
+  border-radius: 16px;
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 86%, transparent);
   overflow: hidden;
   transition:
@@ -483,6 +527,13 @@ body {
   transform: translateY(-2px);
   box-shadow: var(--md-elevation-2);
   border-color: color-mix(in srgb, var(--md-primary) 22%, var(--md-outline-variant) 78%);
+}
+
+@media (hover: none) {
+  .md-card-elevated:hover {
+    transform: none;
+    box-shadow: var(--md-elevation-1);
+  }
 }
 
 .md-card-filled {
@@ -529,7 +580,7 @@ body {
 
 .md-text-field-input {
   width: 100%;
-  height: 52px;
+  height: 48px;
   padding: 0 14px;
   border: 1px solid var(--md-outline);
   border-radius: var(--md-radius-sm);
@@ -687,7 +738,7 @@ body {
 .md-top-app-bar {
   display: flex;
   align-items: center;
-  height: 64px;
+  height: 68px;
   padding: 0 16px;
   background-color: color-mix(in srgb, var(--md-surface) 88%, #ffffff 12%);
   border-bottom: 1px solid color-mix(in srgb, var(--md-outline-variant) 84%, transparent);
@@ -1174,6 +1225,46 @@ body {
 /* ============================================
    Platform Layout Primitives
    ============================================ */
+.app-page-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background:
+    radial-gradient(1280px 640px at -8% -26%, rgba(30, 64, 175, 0.2), transparent 62%),
+    radial-gradient(980px 500px at 108% -16%, rgba(15, 118, 110, 0.16), transparent 62%),
+    radial-gradient(760px 360px at 48% -42%, rgba(59, 130, 246, 0.09), transparent 70%),
+    linear-gradient(156deg, #f8fbff 0%, #f1f7fe 52%, #edf6fb 100%);
+}
+
+.app-page-container {
+  width: 100%;
+  max-width: var(--app-page-max);
+  margin: 0 auto;
+  padding: var(--app-gutter-y) var(--app-gutter-x) calc(var(--app-gutter-y) + 10px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-section-gap);
+}
+
+.app-page-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.app-page-title {
+  font-size: var(--md-headline-medium);
+  font-weight: 700;
+  color: var(--md-on-surface);
+}
+
+.app-page-subtitle {
+  margin-top: 6px;
+  font-size: var(--md-body-medium);
+  color: var(--md-on-surface-variant);
+}
+
 .platform-shell {
   min-height: 100vh;
   min-height: 100dvh;
@@ -1213,12 +1304,12 @@ body {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 1360px;
+  max-width: var(--app-page-max);
   margin: 0 auto;
-  padding: 30px 22px 42px;
+  padding: var(--app-gutter-y) var(--app-gutter-x) calc(var(--app-gutter-y) + 12px);
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--app-section-gap);
 }
 
 .platform-topbar {
@@ -1226,7 +1317,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 17px 20px;
+  padding: 16px 18px;
   border-radius: calc(var(--md-radius-lg) + 2px);
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 84%, transparent);
   background:
@@ -1283,7 +1374,7 @@ body {
     radial-gradient(420px 140px at -12% -42%, color-mix(in srgb, var(--md-primary-container) 42%, transparent), transparent 74%),
     color-mix(in srgb, var(--md-surface) 93%, #ffffff 7%);
   box-shadow: var(--md-elevation-2);
-  padding: 22px;
+  padding: clamp(16px, 2vw, 24px);
   backdrop-filter: blur(7px);
   overflow: hidden;
 }
@@ -1396,7 +1487,7 @@ body {
 
 @media (max-width: 768px) {
   .platform-container {
-    padding: 16px 12px 24px;
+    padding: 14px 12px 20px;
   }
 
   .platform-topbar {

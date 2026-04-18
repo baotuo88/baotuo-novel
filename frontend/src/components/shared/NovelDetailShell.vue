@@ -1,9 +1,9 @@
 <!-- AIMETA P=小说详情壳_详情页布局容器|R=详情页布局_导航|NR=不含具体内容|E=component:NovelDetailShell|X=internal|A=布局组件|D=vue|S=dom|RD=./README.ai -->
 <template>
-  <div class="h-[100dvh] flex flex-col overflow-hidden md-surface">
+  <div class="novel-detail-shell h-[100dvh] flex flex-col overflow-hidden md-surface">
     <!-- Material 3 Top App Bar -->
     <header class="md-top-app-bar sticky top-0 z-40">
-      <div class="max-w-[1800px] mx-auto w-full flex items-center px-4 h-16">
+      <div class="detail-frame w-full flex items-center px-4 h-16">
         <!-- Leading: Menu Button (Mobile) -->
         <button
           class="md-icon-btn lg:hidden mr-2"
@@ -53,10 +53,10 @@
     </header>
 
     <!-- Main Content -->
-    <div class="flex max-w-[1800px] mx-auto w-full flex-1 min-h-0 overflow-hidden">
+    <div class="detail-frame flex w-full flex-1 min-h-0 overflow-hidden">
       <!-- Material 3 Navigation Drawer -->
       <aside
-        class="fixed left-0 top-16 bottom-0 z-30 w-80 md-surface transform transition-transform duration-300 lg:translate-x-0"
+        class="detail-sidebar fixed left-0 bottom-0 z-30 md-surface transform transition-transform duration-300 lg:translate-x-0"
         :class="isSidebarOpen ? 'translate-x-0' : '-translate-x-full'"
         style="border-right: 1px solid var(--md-outline-variant);"
       >
@@ -73,7 +73,7 @@
         </div>
 
         <!-- Navigation Items -->
-        <nav class="px-3 py-4 space-y-1 overflow-y-auto h-[calc(100%-5rem)]">
+        <nav class="detail-sidebar-nav px-3 py-4 space-y-1 overflow-y-auto">
           <button
             v-for="section in sections"
             :key="section.key"
@@ -114,8 +114,8 @@
       </transition>
 
       <!-- Main Content Area -->
-      <div class="flex-1 lg:ml-80 min-h-0 flex flex-col h-full">
-        <div class="flex-1 min-h-0 h-full p-4 sm:p-6 lg:p-8 flex flex-col overflow-hidden box-border">
+      <div class="detail-content-wrap flex-1 min-h-0 flex flex-col h-full">
+        <div class="detail-content-inner flex-1 min-h-0 h-full p-4 sm:p-6 lg:p-8 flex flex-col overflow-hidden box-border">
           <div class="flex-1 flex flex-col min-h-0 h-full">
             <!-- Material 3 Card -->
             <div 
@@ -808,6 +808,48 @@ watch(
 </script>
 
 <style scoped>
+.novel-detail-shell {
+  background:
+    radial-gradient(880px 280px at -6% -22%, color-mix(in srgb, var(--md-primary-container) 38%, transparent), transparent 72%),
+    radial-gradient(760px 260px at 106% -18%, color-mix(in srgb, var(--md-secondary-container) 34%, transparent), transparent 70%),
+    color-mix(in srgb, var(--md-surface-dim) 74%, #ffffff 26%);
+}
+
+.detail-frame {
+  max-width: var(--app-page-max-wide);
+  margin: 0 auto;
+}
+
+.detail-sidebar {
+  width: 19rem;
+  top: 68px;
+}
+
+.detail-sidebar-nav {
+  height: calc(100% - 5rem);
+}
+
+.detail-content-wrap {
+  margin-left: 0;
+}
+
+.detail-content-inner {
+  padding-inline: clamp(12px, 2vw, 28px);
+  padding-block: clamp(12px, 1.6vw, 24px);
+}
+
+@media (min-width: 1024px) {
+  .detail-content-wrap {
+    margin-left: 19rem;
+  }
+}
+
+@media (max-width: 1023px) {
+  .detail-sidebar {
+    width: min(19rem, calc(100vw - 36px));
+  }
+}
+
 /* Material 3 Transition Classes */
 .md-scale-enter-active,
 .md-scale-leave-active {

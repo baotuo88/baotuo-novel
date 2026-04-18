@@ -1,10 +1,10 @@
 <!-- AIMETA P=LLM设置_模型配置界面|R=LLM配置表单|NR=不含模型调用|E=component:LLMSettings|X=internal|A=设置组件|D=vue|S=dom,net|RD=./README.ai -->
 <template>
-  <div class="bg-white/70 backdrop-blur-xl rounded-2xl shadow-lg p-8">
-    <h2 class="text-2xl font-bold text-gray-800 mb-6">LLM 配置</h2>
-    <h5 class="text-1xl font-bold text-gray-800 mb-6">建议使用自己的中转API和KEY</h5>
+  <div class="llm-settings md-card md-card-elevated">
+    <h2 class="md-headline-small llm-heading">LLM 配置</h2>
+    <h5 class="md-body-medium llm-subheading">建议使用自己的中转 API 和 Key，连接更稳定。</h5>
     <div
-      class="mb-6 rounded-lg border px-4 py-3 text-sm"
+      class="llm-status-card mb-6 rounded-lg border px-4 py-3 text-sm"
       :class="subscriptionCardClass"
     >
       <div class="font-semibold">{{ subscriptionTitle }}</div>
@@ -14,13 +14,13 @@
       </div>
     </div>
 
-    <div class="mb-6 rounded-lg border px-4 py-3 text-sm bg-slate-50 border-slate-200 text-slate-700">
+    <div class="llm-billing-card mb-6 rounded-lg border px-4 py-3 text-sm">
       <div class="flex items-center justify-between gap-3 flex-wrap">
         <div class="font-semibold">订阅额度与账单</div>
         <div class="flex items-center gap-2">
           <button
             type="button"
-            class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-100"
+            class="md-btn md-btn-outlined md-ripple llm-mini-btn"
             :disabled="billingLoading"
             @click="loadSubscriptionMetrics"
           >
@@ -28,7 +28,7 @@
           </button>
           <button
             type="button"
-            class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-100"
+            class="md-btn md-btn-outlined md-ripple llm-mini-btn"
             :disabled="billingLoading"
             @click="handleExportBillingCsv"
           >
@@ -69,9 +69,9 @@
         <div class="font-medium mb-2">
           最近 {{ subscriptionBilling.hours }} 小时账单（{{ subscriptionBilling.total_calls }} 次调用）
         </div>
-        <div class="max-h-52 overflow-auto border border-slate-200 rounded-md bg-white">
-          <table class="w-full text-xs">
-            <thead class="sticky top-0 bg-slate-100 text-slate-600">
+        <div class="max-h-52 overflow-auto border border-slate-200 rounded-md bg-white llm-table-wrap">
+          <table class="w-full text-xs llm-table">
+            <thead class="sticky top-0">
               <tr>
                 <th class="px-2 py-1 text-left">时间</th>
                 <th class="px-2 py-1 text-left">类型</th>
@@ -99,15 +99,15 @@
         {{ subscriptionBillingError }}
       </div>
     </div>
-    <form @submit.prevent="handleSave" class="space-y-6">
+    <form @submit.prevent="handleSave" class="space-y-6 llm-form">
       <div>
-        <label for="url" class="block text-sm font-medium text-gray-700">API URL</label>
+        <label for="url" class="md-text-field-label">API URL</label>
         <div class="relative mt-1">
           <input
             type="text"
             id="url"
             v-model="config.llm_provider_url"
-            class="block w-full px-3 py-2 pr-10 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            class="md-text-field-input block w-full pr-10 llm-control-input"
             placeholder="https://api.example.com/v1"
           >
           <button
@@ -123,13 +123,13 @@
         </div>
       </div>
       <div>
-        <label for="key" class="block text-sm font-medium text-gray-700">API Key</label>
+        <label for="key" class="md-text-field-label">API Key</label>
         <div class="relative mt-1">
           <input
             :type="showApiKey ? 'text' : 'password'"
             id="key"
             v-model="config.llm_provider_api_key"
-            class="block w-full px-3 py-2 pr-24 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            class="md-text-field-input block w-full pr-24 llm-control-input"
             placeholder="留空则使用默认Key"
           >
           <button
@@ -160,7 +160,7 @@
         </div>
       </div>
       <div>
-        <label for="model" class="block text-sm font-medium text-gray-700">Model</label>
+        <label for="model" class="md-text-field-label">Model</label>
         <div class="flex gap-2 mt-1">
           <div class="relative flex-1">
             <input
@@ -169,7 +169,7 @@
               v-model="config.llm_provider_model"
               @focus="showModelDropdown = true"
               @blur="hideDropdown"
-              class="block w-full px-3 py-2 pr-10 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+              class="md-text-field-input block w-full pr-10 llm-control-input"
               placeholder="留空则使用默认模型"
             >
             <button
@@ -185,13 +185,13 @@
             <!-- 下拉选择提示框 -->
             <div
               v-if="showModelDropdown && availableModels.length > 0"
-              class="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto"
+              class="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto llm-model-dropdown"
             >
               <div
                 v-for="model in filteredModels"
                 :key="model"
                 @mousedown="selectModel(model)"
-                class="px-3 py-2 cursor-pointer hover:bg-indigo-50 hover:text-indigo-600 text-sm"
+                class="px-3 py-2 cursor-pointer text-sm llm-model-item"
               >
                 {{ model }}
               </div>
@@ -205,7 +205,7 @@
               type="button"
               @click="loadModels"
               :disabled="isLoadingModels"
-              class="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
+              class="md-btn md-btn-tonal md-ripple llm-mini-btn llm-btn-fixed flex items-center gap-2"
             >
               <svg v-if="isLoadingModels" class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -217,7 +217,7 @@
               type="button"
               @click="runConnectionTest"
               :disabled="isTestingConnection"
-              class="px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 transition-colors disabled:bg-emerald-300 disabled:cursor-not-allowed flex items-center gap-2"
+              class="md-btn md-btn-filled md-ripple llm-mini-btn llm-btn-fixed flex items-center gap-2"
             >
               <svg v-if="isTestingConnection" class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -229,7 +229,7 @@
         </div>
         <div
           v-if="connectionResult"
-          class="mt-3 rounded-md px-3 py-2 text-sm border"
+          class="mt-3 rounded-md px-3 py-2 text-sm border llm-connection-result"
           :class="connectionResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-rose-50 border-rose-200 text-rose-700'"
         >
           <div class="font-medium">{{ connectionResult.message }}</div>
@@ -244,8 +244,8 @@
         </div>
       </div>
       <div class="flex justify-end space-x-4 pt-4">
-        <button type="button" @click="handleDelete" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">删除配置</button>
-        <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">保存</button>
+        <button type="button" @click="handleDelete" class="md-btn md-btn-outlined md-ripple">删除配置</button>
+        <button type="submit" class="md-btn md-btn-filled md-ripple">保存</button>
       </div>
     </form>
   </div>
@@ -541,3 +541,96 @@ const hideDropdown = () => {
   }, 200);
 };
 </script>
+
+<style scoped>
+.llm-settings {
+  padding: clamp(16px, 2.2vw, 28px);
+  border-radius: var(--md-radius-xl);
+  background:
+    radial-gradient(560px 180px at -12% -40%, color-mix(in srgb, var(--md-primary-container) 56%, transparent), transparent 74%),
+    radial-gradient(420px 150px at 104% -20%, color-mix(in srgb, var(--md-secondary-container) 52%, transparent), transparent 70%),
+    color-mix(in srgb, var(--md-surface) 95%, #ffffff 5%);
+}
+
+.llm-heading {
+  margin-bottom: 8px;
+}
+
+.llm-subheading {
+  margin-bottom: 16px;
+  color: var(--md-on-surface-variant);
+}
+
+.llm-status-card {
+  border-color: color-mix(in srgb, var(--md-outline-variant) 84%, transparent);
+}
+
+.llm-billing-card {
+  border-color: color-mix(in srgb, var(--md-outline-variant) 84%, transparent);
+  background: color-mix(in srgb, var(--md-surface-container-low) 90%, #ffffff 10%);
+  color: var(--md-on-surface-variant);
+}
+
+.llm-mini-btn {
+  min-height: 36px;
+  padding-inline: 14px;
+  font-size: var(--md-label-medium);
+}
+
+.llm-btn-fixed {
+  min-width: 112px;
+}
+
+.llm-control-input {
+  box-shadow: none;
+}
+
+.llm-table-wrap {
+  border-color: color-mix(in srgb, var(--md-outline-variant) 84%, transparent);
+  background: color-mix(in srgb, var(--md-surface) 96%, #ffffff 4%);
+}
+
+.llm-table thead {
+  background: color-mix(in srgb, var(--md-surface-container-low) 90%, #ffffff 10%);
+  color: var(--md-on-surface-variant);
+}
+
+.llm-table tbody tr {
+  border-top: 1px solid color-mix(in srgb, var(--md-outline-variant) 88%, transparent);
+}
+
+.llm-table tbody tr:hover {
+  background: color-mix(in srgb, var(--md-primary-container) 26%, transparent);
+}
+
+.llm-model-dropdown {
+  border-color: color-mix(in srgb, var(--md-outline-variant) 84%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--md-surface) 96%, #ffffff 4%);
+}
+
+.llm-model-item:hover {
+  background: color-mix(in srgb, var(--md-primary-container) 44%, transparent);
+  color: var(--md-on-primary-container);
+}
+
+.llm-connection-result {
+  border-color: color-mix(in srgb, var(--md-outline-variant) 84%, transparent);
+}
+
+@media (max-width: 768px) {
+  .llm-settings {
+    padding: 14px;
+  }
+
+  .llm-btn-fixed {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .llm-form > div:last-child .flex {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+</style>
