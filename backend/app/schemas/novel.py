@@ -214,6 +214,8 @@ class EvaluateChapterRequest(BaseModel):
 class ConsistencyFixRequest(BaseModel):
     auto_select: bool = True
     min_severity: Literal["critical", "major", "minor"] = "major"
+    preview_only: bool = False
+    fixed_content: Optional[str] = None
 
 
 class ConsistencyFixResponse(BaseModel):
@@ -224,6 +226,9 @@ class ConsistencyFixResponse(BaseModel):
     created_version_id: Optional[int] = None
     selected_version_id: Optional[int] = None
     message: str
+    preview_only: bool = False
+    preview_base_content: Optional[str] = None
+    preview_content: Optional[str] = None
 
 
 class UpdateChapterOutlineRequest(BaseModel):
@@ -273,6 +278,10 @@ class WriterTaskCenterItem(BaseModel):
     age_minutes: int = 0
     error_message: Optional[str] = None
     failure_category: Optional[str] = None
+    stalled: bool = False
+    stalled_seconds: int = 0
+    self_heal_hint: Optional[str] = None
+    can_force_retry: bool = False
 
 
 class WriterTaskCenterResponse(BaseModel):

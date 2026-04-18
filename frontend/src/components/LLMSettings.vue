@@ -17,14 +17,24 @@
     <div class="mb-6 rounded-lg border px-4 py-3 text-sm bg-slate-50 border-slate-200 text-slate-700">
       <div class="flex items-center justify-between gap-3 flex-wrap">
         <div class="font-semibold">订阅额度与账单</div>
-        <button
-          type="button"
-          class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-100"
-          :disabled="billingLoading"
-          @click="loadSubscriptionMetrics"
-        >
-          {{ billingLoading ? '刷新中...' : '刷新' }}
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-100"
+            :disabled="billingLoading"
+            @click="loadSubscriptionMetrics"
+          >
+            {{ billingLoading ? '刷新中...' : '刷新' }}
+          </button>
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-100"
+            :disabled="billingLoading"
+            @click="handleExportBillingCsv"
+          >
+            导出 CSV
+          </button>
+        </div>
       </div>
 
       <div v-if="subscriptionUsage" class="mt-3 space-y-2">
@@ -33,13 +43,22 @@
           <span class="ml-2">({{ requestUsageRatioText }})</span>
         </div>
         <div>
+          剩余额度：{{ requestRemainingText }}
+        </div>
+        <div>
           预算额度：$ {{ subscriptionUsage.today_estimated_cost_usd.toFixed(4) }}
           / {{ budgetLimitText }}
           <span class="ml-2">({{ budgetUsageRatioText }})</span>
         </div>
         <div>
+          剩余预算：{{ budgetRemainingText }}
+        </div>
+        <div>
           预警等级：
           <span :class="usageWarningClass">{{ subscriptionUsage.warning_level }}</span>
+        </div>
+        <div>
+          下次重置：{{ resetAtText }}
         </div>
       </div>
       <div v-else-if="subscriptionUsageError" class="mt-3 text-rose-600">
@@ -239,6 +258,7 @@ import {
   createOrUpdateLLMConfig,
   deleteLLMConfig,
   getAvailableModels,
+  downloadMySubscriptionBillingCsv,
   getMySubscriptionBilling,
   getMySubscriptionStatus,
   getMySubscriptionUsageSummary,
@@ -335,6 +355,13 @@ const requestUsageRatioText = computed(() => {
   return `${Math.round(subscriptionUsage.value.daily_request_ratio * 100)}%`;
 });
 
+const requestRemainingText = computed(() => {
+  if (!subscriptionUsage.value) return '-';
+  return subscriptionUsage.value.daily_request_remaining < 0
+    ? '无限'
+    : String(subscriptionUsage.value.daily_request_remaining);
+});
+
 const budgetLimitText = computed(() => {
   if (!subscriptionUsage.value) return '-';
   if (subscriptionUsage.value.daily_budget_limit_usd <= 0) return '无限';
@@ -345,6 +372,17 @@ const budgetUsageRatioText = computed(() => {
   if (!subscriptionUsage.value) return '-';
   if (subscriptionUsage.value.daily_budget_limit_usd <= 0) return '无限';
   return `${Math.round(subscriptionUsage.value.daily_budget_ratio * 100)}%`;
+});
+
+const budgetRemainingText = computed(() => {
+  if (!subscriptionUsage.value) return '-';
+  if (subscriptionUsage.value.daily_budget_limit_usd <= 0) return '无限';
+  return `$ ${subscriptionUsage.value.daily_budget_remaining_usd.toFixed(4)}`;
+});
+
+const resetAtText = computed(() => {
+  if (!subscriptionUsage.value?.reset_at) return '-';
+  return formatDateTime(subscriptionUsage.value.reset_at);
 });
 
 const loadSubscriptionMetrics = async () => {
@@ -368,6 +406,15 @@ const loadSubscriptionMetrics = async () => {
     }
   } finally {
     billingLoading.value = false;
+  }
+};
+
+const handleExportBillingCsv = async () => {
+  try {
+    await downloadMySubscriptionBillingCsv({ hours: 72, limit: 500 });
+  } catch (error) {
+    console.error('导出账单失败', error);
+    alert('导出账单失败，请稍后重试');
   }
 };
 

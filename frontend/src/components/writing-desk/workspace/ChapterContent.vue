@@ -278,8 +278,40 @@
             </div>
             <div v-else class="consistency-ok">未发现明显冲突，设定一致性良好。</div>
             <div v-if="consistencyFixMessage" class="consistency-fix-message">{{ consistencyFixMessage }}</div>
+            <div v-if="consistencyPreviewContent" class="consistency-preview-box">
+              <div class="consistency-preview-title">修复预览 Diff</div>
+              <div class="consistency-preview-stats">
+                新增 {{ consistencyPreviewDiff.added }} 行 · 删除 {{ consistencyPreviewDiff.removed }} 行 · 保留 {{ consistencyPreviewDiff.equal }} 行
+              </div>
+              <div class="consistency-preview-lines">
+                <div
+                  v-for="(line, idx) in consistencyPreviewVisibleLines"
+                  :key="`preview-${line.type}-${idx}`"
+                  :class="[
+                    'consistency-preview-line',
+                    line.type === 'add' ? 'consistency-preview-add' : '',
+                    line.type === 'remove' ? 'consistency-preview-remove' : '',
+                    line.type === 'equal' ? 'consistency-preview-equal' : ''
+                  ]"
+                >
+                  <span class="consistency-preview-prefix">{{ line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ' }}</span>
+                  <span class="consistency-preview-text">{{ line.text || ' ' }}</span>
+                </div>
+              </div>
+              <div v-if="consistencyPreviewDiff.lines.length > consistencyPreviewMaxLines" class="consistency-preview-more">
+                仅展示前 {{ consistencyPreviewMaxLines }} 行
+              </div>
+            </div>
           </div>
           <div class="p-6 border-t flex justify-end gap-2" style="border-top-color: var(--md-outline-variant);">
+            <button
+              v-if="canAutoFixConsistency && consistencyPreviewContent"
+              @click="regenerateConsistencyPreview"
+              :disabled="isFixingConsistency"
+              class="md-btn md-btn-outlined md-ripple disabled:opacity-50"
+            >
+              重新生成预览
+            </button>
             <button
               v-if="canAutoFixConsistency"
               @click="runConsistencyFix"
@@ -289,7 +321,7 @@
               <svg v-if="isFixingConsistency" class="w-4 h-4 animate-spin" fill="currentColor" viewBox="0 0 20 20">
                 <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"></path>
               </svg>
-              {{ isFixingConsistency ? '修复中...' : '一键修复（重大及以上）' }}
+              {{ isFixingConsistency ? '处理中...' : (consistencyPreviewContent ? '应用该修复' : '生成修复预览') }}
             </button>
             <button
               @click="showConsistencyResult = false"
@@ -313,11 +345,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { globalAlert } from '@/composables/useAlert'
 import type { Chapter, ChapterConsistencyReview, ConsistencyActionSuggestion } from '@/api/novel'
 import { NovelAPI, OptimizerAPI } from '@/api/novel'
 import WDVersionHistoryModal from '@/components/writing-desk/WDVersionHistoryModal.vue'
+import { buildLineDiff } from '@/utils/textDiff'
 
 interface Props {
   selectedChapter: Chapter
@@ -345,6 +378,23 @@ const consistencySuggestions = ref<ConsistencyActionSuggestion[]>([])
 const canAutoFixConsistency = ref(false)
 const isFixingConsistency = ref(false)
 const consistencyFixMessage = ref('')
+const consistencyPreviewBase = ref('')
+const consistencyPreviewContent = ref('')
+const consistencyPreviewMaxLines = 180
+const consistencyPreviewDiff = computed(() => buildLineDiff(
+  consistencyPreviewBase.value,
+  consistencyPreviewContent.value,
+  { maxLines: 900, maxMatrixCells: 500_000 }
+))
+const consistencyPreviewVisibleLines = computed(() =>
+  consistencyPreviewDiff.value.lines.slice(0, consistencyPreviewMaxLines)
+)
+
+const resetConsistencyPreview = () => {
+  consistencyFixMessage.value = ''
+  consistencyPreviewBase.value = ''
+  consistencyPreviewContent.value = ''
+}
 
 // 优化维度配置
 const optimizeDimensions = [
@@ -444,7 +494,7 @@ const runConsistencyCheck = async () => {
     canAutoFixConsistency.value = Boolean(
       !response.review.is_consistent && response.auto_fix_available
     )
-    consistencyFixMessage.value = ''
+    resetConsistencyPreview()
     showConsistencyResult.value = true
     if (response.review.is_consistent) {
       globalAlert.showSuccess('一致性检查通过', '检查完成')
@@ -454,22 +504,17 @@ const runConsistencyCheck = async () => {
   } catch (error) {
     consistencySuggestions.value = []
     canAutoFixConsistency.value = false
+    resetConsistencyPreview()
     globalAlert.showError(`一致性检查失败: ${error instanceof Error ? error.message : '未知错误'}`)
   } finally {
     isCheckingConsistency.value = false
   }
 }
 
-const runConsistencyFix = async () => {
+const regenerateConsistencyPreview = async () => {
   if (!props.projectId || !canAutoFixConsistency.value || isFixingConsistency.value) {
     return
   }
-  const confirmed = await globalAlert.showConfirm(
-    '将自动创建修复版本，并自动切换到修复版本。是否继续？',
-    '一致性一键修复'
-  )
-  if (!confirmed) return
-
   isFixingConsistency.value = true
   consistencyFixMessage.value = ''
   try {
@@ -477,13 +522,59 @@ const runConsistencyFix = async () => {
       props.projectId,
       props.selectedChapter.chapter_number,
       {
-        auto_select: true,
-        min_severity: 'major'
+        auto_select: false,
+        min_severity: 'major',
+        preview_only: true
       }
     )
     consistencyReview.value = response.review
     consistencyFixMessage.value = response.message
+    consistencyPreviewBase.value = String(
+      response.preview_base_content || cleanVersionContent(props.selectedChapter.content || '')
+    )
+    consistencyPreviewContent.value = String(response.preview_content || '')
+    if (consistencyPreviewContent.value.trim()) {
+      globalAlert.showSuccess('已生成修复预览，请确认后应用', '一致性修复预览')
+    } else {
+      globalAlert.showSuccess(response.message, '一致性修复')
+    }
+  } catch (error) {
+    globalAlert.showError(`一致性修复失败: ${error instanceof Error ? error.message : '未知错误'}`)
+  } finally {
+    isFixingConsistency.value = false
+  }
+}
+
+const runConsistencyFix = async () => {
+  if (!props.projectId || !canAutoFixConsistency.value || isFixingConsistency.value) {
+    return
+  }
+  const hasPreview = Boolean(consistencyPreviewContent.value.trim())
+  if (hasPreview) {
+    const confirmed = await globalAlert.showConfirm(
+      '将应用当前修复预览并自动切换到修复版本，是否继续？',
+      '应用修复预览'
+    )
+    if (!confirmed) return
+  }
+
+  if (!hasPreview) {
+    await regenerateConsistencyPreview()
+    return
+  }
+
+  isFixingConsistency.value = true
+  consistencyFixMessage.value = ''
+  try {
+    const response = await NovelAPI.fixChapterConsistency(props.projectId, props.selectedChapter.chapter_number, {
+      auto_select: true,
+      min_severity: 'major',
+      fixed_content: consistencyPreviewContent.value
+    })
+    consistencyReview.value = response.review
+    consistencyFixMessage.value = response.message
     canAutoFixConsistency.value = false
+    resetConsistencyPreview()
     if (response.fixed) {
       globalAlert.showSuccess(response.message, '一致性修复')
       emit('chapterUpdated', props.selectedChapter.chapter_number)
@@ -496,6 +587,17 @@ const runConsistencyFix = async () => {
     isFixingConsistency.value = false
   }
 }
+
+watch(
+  () => props.selectedChapter.chapter_number,
+  () => {
+    consistencyReview.value = null
+    consistencySuggestions.value = []
+    canAutoFixConsistency.value = false
+    showConsistencyResult.value = false
+    resetConsistencyPreview()
+  }
+)
 
 const handleVersionRolledBack = (chapterNumber: number) => {
   showVersionHistory.value = false
@@ -671,5 +773,75 @@ const applyOptimization = async () => {
   background: var(--md-surface-container-low);
   color: var(--md-on-surface);
   font-size: 12px;
+}
+
+.consistency-preview-box {
+  margin-top: 12px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 10px;
+  background: var(--md-surface-container);
+  padding: 10px 12px;
+}
+
+.consistency-preview-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--md-on-surface);
+}
+
+.consistency-preview-stats {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+
+.consistency-preview-lines {
+  margin-top: 8px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 8px;
+  overflow: auto;
+  max-height: 300px;
+  background: var(--md-surface);
+}
+
+.consistency-preview-line {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  column-gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 2px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.consistency-preview-prefix {
+  color: var(--md-on-surface-variant);
+  user-select: none;
+}
+
+.consistency-preview-text {
+  color: var(--md-on-surface);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.consistency-preview-add {
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.consistency-preview-remove {
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.consistency-preview-equal {
+  background: var(--md-surface);
+}
+
+.consistency-preview-more {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--md-on-surface-variant);
+  text-align: right;
 }
 </style>

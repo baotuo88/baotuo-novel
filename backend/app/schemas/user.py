@@ -145,10 +145,13 @@ class UserSubscriptionUsageSummaryRead(BaseModel):
     is_active: bool = Field(default=False, description="订阅是否有效")
     daily_request_used: int = Field(default=0, description="今日已用请求数")
     daily_request_limit: int = Field(default=0, description="今日请求上限（-1 表示无限）")
+    daily_request_remaining: int = Field(default=0, description="今日剩余请求数（-1 表示无限）")
     daily_request_ratio: float = Field(default=0.0, description="请求额度使用率")
     today_estimated_cost_usd: float = Field(default=0.0, description="今日估算花费(USD)")
     daily_budget_limit_usd: float = Field(default=0.0, description="日预算上限(USD)")
+    daily_budget_remaining_usd: float = Field(default=0.0, description="今日剩余预算(USD)，0 表示无限")
     daily_budget_ratio: float = Field(default=0.0, description="预算使用率")
+    reset_at: datetime = Field(..., description="额度重置时间(UTC)")
     warning_level: Literal["ok", "warning", "critical", "exceeded"] = Field(
         default="ok",
         description="额度预警等级",

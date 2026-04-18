@@ -54,8 +54,12 @@
         <div
           v-for="(item, index) in eventDrafts"
           :key="item.local_id"
-          class="md-card md-card-outlined p-4"
+          :class="[
+            'md-card md-card-outlined p-4 timeline-item',
+            item.local_id === focusedLocalId ? 'timeline-item-focused' : ''
+          ]"
           style="border-radius: var(--md-radius-md);"
+          :data-event-local-id="item.local_id"
         >
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div class="flex min-w-0 items-center gap-2">
@@ -167,7 +171,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { NovelAPI, type TimelineEventItem } from '@/api/novel'
 
@@ -192,6 +196,8 @@ const props = withDefaults(
   defineProps<{
     projectId?: string
     editable?: boolean
+    focusChapterNumber?: number | null
+    focusEventId?: number | null
   }>(),
   {
     editable: true
@@ -207,6 +213,7 @@ const error = ref<string | null>(null)
 const saveHint = ref('')
 const eventDrafts = ref<TimelineEventDraft[]>([])
 const expandedIds = ref<Set<string>>(new Set())
+const focusedLocalId = ref('')
 
 const toDraft = (event: TimelineEventItem, index: number): TimelineEventDraft => {
   const localId = `evt-${event.id || index}-${event.chapter_number}`
@@ -333,6 +340,25 @@ const toggleExpanded = (localId: string) => {
   expandedIds.value = next
 }
 
+const applyFocus = async () => {
+  const target = props.focusEventId
+    ? eventDrafts.value.find((item) => Number(item.id) === Number(props.focusEventId))
+    : eventDrafts.value.find((item) => Number(item.chapter_number) === Number(props.focusChapterNumber || 0))
+  if (!target) {
+    focusedLocalId.value = ''
+    return
+  }
+  focusedLocalId.value = target.local_id
+  const nextExpanded = new Set(expandedIds.value)
+  nextExpanded.add(target.local_id)
+  expandedIds.value = nextExpanded
+  await nextTick()
+  const element = document.querySelector(`[data-event-local-id="${target.local_id}"]`)
+  if (element instanceof HTMLElement) {
+    element.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+}
+
 watch(
   () => resolvedProjectId.value,
   () => {
@@ -340,4 +366,19 @@ watch(
   },
   { immediate: true }
 )
+
+watch(
+  () => [props.focusEventId, props.focusChapterNumber, eventDrafts.value.length],
+  () => {
+    void applyFocus()
+  },
+  { immediate: true }
+)
 </script>
+
+<style scoped>
+.timeline-item-focused {
+  border-color: rgba(37, 99, 235, 0.7);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.2);
+}
+</style>

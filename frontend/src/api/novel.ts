@@ -267,6 +267,10 @@ export interface WriterTaskCenterItem {
   age_minutes: number
   error_message?: string | null
   failure_category?: string | null
+  stalled?: boolean
+  stalled_seconds?: number
+  self_heal_hint?: string | null
+  can_force_retry?: boolean
 }
 
 export interface WriterTaskCenterResponse {
@@ -358,7 +362,13 @@ export interface DeleteNovelsResponse {
 export type NovelSectionType = 'overview' | 'world_setting' | 'characters' | 'relationships' | 'chapter_outline' | 'chapters'
 
 // 分析型Section（不属于NovelSectionType，使用独立的analytics API）
-export type AnalysisSectionType = 'emotion_curve' | 'foreshadowing' | 'world_graph' | 'timeline' | 'terminology'
+export type AnalysisSectionType =
+  | 'emotion_curve'
+  | 'foreshadowing'
+  | 'world_graph'
+  | 'timeline'
+  | 'terminology'
+  | 'quality_dashboard'
 
 // 所有Section的联合类型
 export type AllSectionType = NovelSectionType | AnalysisSectionType
@@ -460,6 +470,8 @@ export interface ChapterConsistencyCheckResponse {
 export interface ChapterConsistencyFixPayload {
   auto_select?: boolean
   min_severity?: 'critical' | 'major' | 'minor'
+  preview_only?: boolean
+  fixed_content?: string
 }
 
 export interface ChapterConsistencyFixResponse {
@@ -470,6 +482,9 @@ export interface ChapterConsistencyFixResponse {
   created_version_id?: number | null
   selected_version_id?: number | null
   message: string
+  preview_only?: boolean
+  preview_base_content?: string | null
+  preview_content?: string | null
 }
 
 export interface WorldGraphResponse {
@@ -492,6 +507,42 @@ export interface WorldGraphResponse {
     character_count: number
     faction_count: number
   }
+}
+
+export interface ProjectQualityDashboard {
+  project_id: string
+  generated_at: string
+  overall_score: number
+  metrics: {
+    consistency_score: number
+    foreshadowing_score: number
+    completion_score: number
+    stability_score: number
+  }
+  chapter_stats: {
+    total_chapters: number
+    successful_chapters: number
+    failed_chapters: number
+    average_word_count: number
+  }
+  consistency: {
+    checked_versions: number
+    consistent_versions: number
+    violation_count: number
+    severity_breakdown: Record<string, number>
+  }
+  foreshadowing: {
+    total: number
+    resolved: number
+    unresolved: number
+    overall_quality_score: number
+  }
+  timeline: {
+    event_count: number
+    turning_points: number
+  }
+  top_risks: string[]
+  recommendations: string[]
 }
 
 export interface TimelineEventItem {
@@ -655,6 +706,10 @@ export class NovelAPI {
     if (query.end_chapter != null) params.set('end_chapter', String(query.end_chapter))
     const queryString = params.toString()
     return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/timeline${queryString ? `?${queryString}` : ''}`)
+  }
+
+  static async getProjectQualityDashboard(projectId: string): Promise<ProjectQualityDashboard> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/quality-dashboard`)
   }
 
   static async saveProjectTimeline(

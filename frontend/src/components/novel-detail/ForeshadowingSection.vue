@@ -106,7 +106,16 @@
         <p class="md-body-medium" style="color: var(--md-on-surface);">当前筛选下暂无伏笔</p>
       </div>
 
-      <div v-for="item in filteredItems" :key="item.id" class="md-card md-card-outlined p-4" style="border-radius: var(--md-radius-md);">
+      <div
+        v-for="item in filteredItems"
+        :key="item.id"
+        :class="[
+          'md-card md-card-outlined p-4 foreshadowing-item',
+          item.id === focusedForeshadowingId ? 'foreshadowing-item-focused' : ''
+        ]"
+        style="border-radius: var(--md-radius-md);"
+        :data-foreshadowing-id="item.id"
+      >
         <div class="flex flex-wrap items-start justify-between gap-2">
           <div class="flex-1 min-w-0">
             <div class="flex flex-wrap items-center gap-2">
@@ -222,7 +231,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   NovelAPI,
@@ -235,6 +244,8 @@ const props = withDefaults(
   defineProps<{
     projectId?: string
     editable?: boolean
+    focusChapterNumber?: number | null
+    focusForeshadowingId?: number | null
   }>(),
   {
     editable: true
@@ -248,6 +259,7 @@ const isLoading = ref(false)
 const isOperating = ref(false)
 const error = ref<string | null>(null)
 const showCreateForm = ref(false)
+const focusedForeshadowingId = ref<number | null>(null)
 
 const foreshadowings = ref<ForeshadowingBoardItem[]>([])
 const analysis = ref<ForeshadowingAnalysisResponse | null>(null)
@@ -461,6 +473,29 @@ const dismissReminder = async (reminderId: number) => {
   }
 }
 
+const applyFocus = async () => {
+  const byId = props.focusForeshadowingId
+    ? foreshadowings.value.find((item) => item.id === Number(props.focusForeshadowingId))
+    : null
+  const byChapter = !byId && props.focusChapterNumber
+    ? foreshadowings.value.find((item) => item.chapter_number === Number(props.focusChapterNumber))
+    : null
+  const target = byId || byChapter
+  if (!target) {
+    focusedForeshadowingId.value = null
+    return
+  }
+  focusedForeshadowingId.value = target.id
+  activeStatusTab.value = target.status === 'abandoned'
+    ? 'abandoned'
+    : (resolvedStatuses.has(target.status) ? 'resolved' : 'unresolved')
+  await nextTick()
+  const element = document.querySelector(`[data-foreshadowing-id="${target.id}"]`)
+  if (element instanceof HTMLElement) {
+    element.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+}
+
 watch(
   () => resolvedProjectId.value,
   () => {
@@ -468,4 +503,19 @@ watch(
   },
   { immediate: true }
 )
+
+watch(
+  () => [props.focusForeshadowingId, props.focusChapterNumber, foreshadowings.value.length],
+  () => {
+    void applyFocus()
+  },
+  { immediate: true }
+)
 </script>
+
+<style scoped>
+.foreshadowing-item-focused {
+  border-color: rgba(37, 99, 235, 0.7);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.2);
+}
+</style>

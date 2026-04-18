@@ -1,10 +1,12 @@
 # AIMETA P=认证API_登录注册和令牌管理|R=用户认证_令牌生成|NR=不含用户管理|E=route:POST_/api/auth/*|X=http|A=登录_注册_令牌|D=fastapi,jose|S=db|RD=./README.ai
 import logging
+import csv
+import io
 from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -111,6 +113,58 @@ async def read_current_user_subscription_billing(
     service: UserSubscriptionService = Depends(get_user_subscription_service),
 ):
     return await service.get_billing_summary(current_user.id, hours=hours, limit=limit)
+
+
+@router.get("/subscription/billing/export.csv")
+async def export_current_user_subscription_billing_csv(
+    hours: int = 72,
+    limit: int = 500,
+    current_user: UserInDB = Depends(get_current_user),
+    service: UserSubscriptionService = Depends(get_user_subscription_service),
+):
+    summary = await service.get_billing_summary(current_user.id, hours=hours, limit=limit)
+    csv_buffer = io.StringIO()
+    csv_buffer.write("\ufeff")
+    writer = csv.writer(csv_buffer)
+    writer.writerow(
+        [
+            "id",
+            "created_at",
+            "project_id",
+            "request_type",
+            "model",
+            "status",
+            "estimated_input_tokens",
+            "estimated_output_tokens",
+            "estimated_cost_usd",
+            "latency_ms",
+        ]
+    )
+    for item in summary.items:
+        writer.writerow(
+            [
+                item.id,
+                item.created_at.isoformat() if item.created_at else "",
+                item.project_id or "",
+                item.request_type,
+                item.model or "",
+                item.status,
+                item.estimated_input_tokens,
+                item.estimated_output_tokens,
+                f"{float(item.estimated_cost_usd or 0.0):.8f}",
+                item.latency_ms if item.latency_ms is not None else "",
+            ]
+        )
+
+    filename = f"subscription_billing_{current_user.id}_{hours}h.csv"
+    return StreamingResponse(
+        iter([csv_buffer.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/linuxdo/login")

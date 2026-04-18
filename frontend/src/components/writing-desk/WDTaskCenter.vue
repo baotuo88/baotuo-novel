@@ -66,6 +66,7 @@
                 <div class="task-title-wrap">
                   <h4 class="md-title-small font-semibold">第{{ item.chapter_number }}章</h4>
                   <span class="task-stage">{{ item.stage_label }}</span>
+                  <span v-if="item.stalled" class="task-stalled-chip">心跳超时</span>
                 </div>
                 <span :class="['task-state-chip', `task-state-${item.queue_state}`]">
                   {{ queueStateLabel(item.queue_state) }}
@@ -77,6 +78,9 @@
               </div>
               <div class="md-body-small md-on-surface-variant mt-1">{{ item.status_message }}</div>
               <div class="md-body-small md-on-surface-variant mt-1">状态：{{ item.status }} · {{ item.word_count }} 字 · {{ item.age_minutes }} 分钟前更新</div>
+              <div v-if="item.self_heal_hint" class="task-self-heal mt-2">
+                {{ item.self_heal_hint }}
+              </div>
 
               <div v-if="item.error_message" class="task-error mt-2">
                 {{ formatFailureMessage(item) }}
@@ -85,6 +89,14 @@
               <div class="task-actions mt-3">
                 <button class="md-btn md-btn-text md-ripple" @click="emit('jumpChapter', item.chapter_number)">
                   定位章节
+                </button>
+                <button
+                  v-if="item.can_force_retry"
+                  class="md-btn md-btn-tonal md-ripple"
+                  :disabled="actionLoading[item.task_id]"
+                  @click="forceRetryTask(item)"
+                >
+                  强制重试
                 </button>
                 <button
                   class="md-btn md-btn-outlined md-ripple"
@@ -153,6 +165,7 @@ const queueStateLabel = (state: string) => {
 }
 
 const failureCategoryLabel = (category?: string | null) => {
+  if (category === 'stale') return '任务卡住'
   if (category === 'timeout') return '超时'
   if (category === 'auth') return '鉴权失败'
   if (category === 'rate_limit') return '限流/额度'
@@ -362,6 +375,29 @@ const retryTask = async (item: WriterTaskCenterItem) => {
   }
 }
 
+const forceRetryTask = async (item: WriterTaskCenterItem) => {
+  if (!props.projectId || !item.can_force_retry) return
+  const confirmed = await globalAlert.showConfirm(
+    `第${item.chapter_number}章任务可能卡住，是否强制重试？`,
+    '任务自愈'
+  )
+  if (!confirmed) return
+  actionLoading[item.task_id] = true
+  try {
+    const result = await NovelAPI.retryWriterTask(props.projectId, item.chapter_number, {
+      force: true,
+      resume_from_checkpoint: true,
+    })
+    globalAlert.showSuccess(result.message || '强制重试任务已提交')
+    await fetchTasks()
+    emit('taskUpdated', item.chapter_number)
+  } catch (error) {
+    globalAlert.showError(`强制重试失败: ${error instanceof Error ? error.message : '未知错误'}`)
+  } finally {
+    actionLoading[item.task_id] = false
+  }
+}
+
 watch(
   () => props.show,
   (show) => {
@@ -474,6 +510,15 @@ onUnmounted(() => {
   color: var(--md-on-surface-variant);
 }
 
+.task-stalled-chip {
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-weight: 600;
+  background: rgba(220, 38, 38, 0.12);
+  color: #b91c1c;
+}
+
 .task-state-chip {
   font-size: 12px;
   border-radius: 999px;
@@ -522,6 +567,16 @@ onUnmounted(() => {
   border-radius: var(--md-radius-sm);
   padding: 6px 8px;
   word-break: break-all;
+}
+
+.task-self-heal {
+  font-size: 12px;
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  border-radius: 10px;
+  padding: 6px 8px;
+  line-height: 1.5;
 }
 
 .task-actions {

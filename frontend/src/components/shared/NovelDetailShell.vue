@@ -154,6 +154,7 @@
                 @edit="handleSectionEdit"
                 @add="startAddChapter"
                 @refresh="handleWorldGraphRefresh"
+                @navigate="handleGraphNavigate"
               />
             </div>
           </div>
@@ -253,6 +254,7 @@ import ForeshadowingSection from '@/components/novel-detail/ForeshadowingSection
 import TimelineSection from '@/components/novel-detail/TimelineSection.vue'
 import TerminologySection from '@/components/novel-detail/TerminologySection.vue'
 import WorldGraphSection from '@/components/novel-detail/WorldGraphSection.vue'
+import QualityDashboardSection from '@/components/novel-detail/QualityDashboardSection.vue'
 
 interface Props {
   isAdmin?: boolean
@@ -277,7 +279,10 @@ const sections: Array<{ key: SectionKey; label: string; description: string }> =
   { key: 'characters', label: '主要角色', description: '人物性格与目标' },
   { key: 'relationships', label: '人物关系', description: '角色之间的联系' },
   ...(!props.isAdmin
-    ? [{ key: 'world_graph' as SectionKey, label: '世界图谱', description: '结构树与关系网' }]
+    ? [
+        { key: 'world_graph' as SectionKey, label: '世界图谱', description: '结构树与关系网' },
+        { key: 'quality_dashboard' as SectionKey, label: '质量看板', description: '一致性与闭环质量' },
+      ]
     : []),
   { key: 'timeline', label: '故事时间线', description: '章节事件与时间锚点' },
   { key: 'terminology', label: '术语词典', description: '名称统一与生成约束' },
@@ -293,6 +298,7 @@ const sectionComponents: Record<SectionKey, any> = {
   characters: CharactersSection,
   relationships: RelationshipsSection,
   world_graph: WorldGraphSection,
+  quality_dashboard: QualityDashboardSection,
   timeline: TimelineSection,
   terminology: TerminologySection,
   chapter_outline: ChapterOutlineSection,
@@ -328,6 +334,11 @@ const getSectionIcon = (key: SectionKey) => {
       h('circle', { cx: 18, cy: 6, r: 2 }),
       h('circle', { cx: 12, cy: 18, r: 2 }),
       h('path', { d: 'M8 6h8M7.5 7.2l3.8 8M16.5 7.2l-3.8 8' })
+    ]),
+    quality_dashboard: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
+      h('path', { d: 'M4 19h16' }),
+      h('path', { d: 'M7 19V9m5 10V5m5 14v-7' }),
+      h('path', { d: 'M4 5h16' }),
     ]),
     timeline: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
       h('circle', { cx: 5, cy: 6, r: 1.5 }),
@@ -368,6 +379,7 @@ const sectionLoading = reactive<Record<SectionKey, boolean>>({
   characters: false,
   relationships: false,
   world_graph: false,
+  quality_dashboard: false,
   timeline: false,
   terminology: false,
   chapter_outline: false,
@@ -381,6 +393,7 @@ const sectionError = reactive<Record<SectionKey, string | null>>({
   characters: null,
   relationships: null,
   world_graph: null,
+  quality_dashboard: null,
   timeline: null,
   terminology: null,
   chapter_outline: null,
@@ -396,6 +409,8 @@ const overviewMeta = reactive<{ title: string; updated_at: string | null }>({
 
 const activeSection = ref<SectionKey>('overview')
 const focusChapterNumber = ref<number | null>(null)
+const focusTimelineEventId = ref<number | null>(null)
+const focusForeshadowingId = ref<number | null>(null)
 
 const isSectionKey = (value: string): value is SectionKey => (
   sections.some((section) => section.key === value)
@@ -409,6 +424,22 @@ const parseSectionFromQuery = (): SectionKey | null => {
 
 const parseChapterFromQuery = (): number | null => {
   const raw = route.query.chapter
+  if (typeof raw !== 'string') return null
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 1) return null
+  return value
+}
+
+const parseTimelineEventIdFromQuery = (): number | null => {
+  const raw = route.query.timeline_event_id
+  if (typeof raw !== 'string') return null
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 1) return null
+  return value
+}
+
+const parseForeshadowingIdFromQuery = (): number | null => {
+  const raw = route.query.foreshadowing_id
   if (typeof raw !== 'string') return null
   const value = Number(raw)
   if (!Number.isInteger(value) || value < 1) return null
@@ -476,6 +507,22 @@ const loadSection = async (section: SectionKey, force = false) => {
       sectionData[section] = response
     } catch (error) {
       console.error('加载世界图谱失败:', error)
+      sectionError[section] = error instanceof Error ? error.message : '加载失败'
+    } finally {
+      sectionLoading[section] = false
+    }
+    return
+  }
+
+  if (section === 'quality_dashboard') {
+    if (!force && sectionData[section]) return
+    sectionLoading[section] = true
+    sectionError[section] = null
+    try {
+      const response = await NovelAPI.getProjectQualityDashboard(projectId)
+      sectionData[section] = response
+    } catch (error) {
+      console.error('加载质量看板失败:', error)
       sectionError[section] = error instanceof Error ? error.message : '加载失败'
     } finally {
       sectionLoading[section] = false
@@ -557,10 +604,16 @@ const componentProps = computed(() => {
         editable,
         projectId
       }
+    case 'quality_dashboard':
+      return {
+        data: data || null
+      }
     case 'timeline':
       return {
         editable,
-        projectId
+        projectId,
+        focusChapterNumber: activeSection.value === 'timeline' ? focusChapterNumber.value : null,
+        focusEventId: activeSection.value === 'timeline' ? focusTimelineEventId.value : null
       }
     case 'terminology':
       return {
@@ -570,7 +623,9 @@ const componentProps = computed(() => {
     case 'foreshadowing':
       return {
         editable,
-        projectId
+        projectId,
+        focusChapterNumber: activeSection.value === 'foreshadowing' ? focusChapterNumber.value : null,
+        focusForeshadowingId: activeSection.value === 'foreshadowing' ? focusForeshadowingId.value : null
       }
     case 'chapter_outline':
       return { outline: data?.chapter_outline || [], editable }
@@ -640,6 +695,26 @@ const handleWorldGraphRefresh = async () => {
   await loadSection('world_setting', true)
 }
 
+const handleGraphNavigate = async (payload: {
+  section: 'timeline' | 'foreshadowing'
+  chapterNumber?: number
+  eventId?: number
+  foreshadowingId?: number
+}) => {
+  const targetSection: SectionKey = payload.section
+  activeSection.value = targetSection
+  await loadSection(targetSection, true)
+  await router.replace({
+    query: {
+      ...route.query,
+      section: targetSection,
+      chapter: payload.chapterNumber ? String(payload.chapterNumber) : undefined,
+      timeline_event_id: payload.eventId ? String(payload.eventId) : undefined,
+      foreshadowing_id: payload.foreshadowingId ? String(payload.foreshadowingId) : undefined,
+    }
+  })
+}
+
 const startAddChapter = async () => {
   if (props.isAdmin) return
   await ensureProjectLoaded()
@@ -696,6 +771,8 @@ onMounted(async () => {
     activeSection.value = initialSection
   }
   focusChapterNumber.value = parseChapterFromQuery()
+  focusTimelineEventId.value = parseTimelineEventIdFromQuery()
+  focusForeshadowingId.value = parseForeshadowingIdFromQuery()
 
   // 只加载必要的 section 数据，不预加载完整项目
   await loadSection('overview', true)
@@ -716,7 +793,7 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () => [route.query.section, route.query.chapter],
+  () => [route.query.section, route.query.chapter, route.query.timeline_event_id, route.query.foreshadowing_id],
   () => {
     const targetSection = parseSectionFromQuery()
     if (targetSection && targetSection !== activeSection.value) {
@@ -724,6 +801,8 @@ watch(
       void loadSection(targetSection)
     }
     focusChapterNumber.value = parseChapterFromQuery()
+    focusTimelineEventId.value = parseTimelineEventIdFromQuery()
+    focusForeshadowingId.value = parseForeshadowingIdFromQuery()
   }
 )
 </script>

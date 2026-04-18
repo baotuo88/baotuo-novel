@@ -6,11 +6,13 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ...core.dependencies import get_current_user
 from ...db.session import get_session
 from ...models.faction import FactionRelationship
 from ...models.novel import Chapter
+from ...models.foreshadowing import Foreshadowing, ForeshadowingAnalysis
 from ...models.memory_layer import TimelineEvent
 from ...schemas.user import UserInDB
 from ...services.constitution_service import ConstitutionService
@@ -247,6 +249,20 @@ def _extract_names_from_list(source: Any) -> list[str]:
             if name:
                 names.append(name)
     return names
+
+
+def _normalize_match_text(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    return " ".join(text.split())
+
+
+def _short_content(value: Any, max_length: int = 80) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_length:
+        return text
+    return f"{text[: max_length - 1]}…"
 
 
 def _append_world_tree_nodes(
@@ -685,6 +701,22 @@ async def get_world_graph(
     characters = raw_characters if isinstance(raw_characters, list) else []
     raw_relationships = (blueprint.relationships if blueprint else []) or []
     relationships = raw_relationships if isinstance(raw_relationships, list) else []
+    timeline_events = (
+        await session.execute(
+            select(TimelineEvent)
+            .where(TimelineEvent.project_id == project_id)
+            .order_by(TimelineEvent.chapter_number.asc(), TimelineEvent.id.asc())
+            .limit(1200)
+        )
+    ).scalars().all()
+    foreshadowings = (
+        await session.execute(
+            select(Foreshadowing)
+            .where(Foreshadowing.project_id == project_id)
+            .order_by(Foreshadowing.chapter_number.asc(), Foreshadowing.id.asc())
+            .limit(1200)
+        )
+    ).scalars().all()
 
     world_nodes: list[GraphNode] = [
         GraphNode(
@@ -887,6 +919,91 @@ async def get_world_graph(
                     edge_seq += 1
                     break
 
+    for node in graph_nodes.values():
+        keyword = _normalize_match_text(node.label)
+        if not keyword:
+            continue
+        has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in keyword)
+        if len(keyword) < (1 if has_cjk else 2):
+            continue
+
+        timeline_hits: List[Dict[str, Any]] = []
+        for event in timeline_events:
+            involved_items = [
+                _normalize_match_text(name)
+                for name in (event.involved_characters or [])
+                if _normalize_match_text(name)
+            ]
+            event_blob = _normalize_match_text(
+                " ".join(
+                    [
+                        str(event.event_title or ""),
+                        str(event.event_description or ""),
+                        str(event.location or ""),
+                        " ".join(involved_items),
+                    ]
+                )
+            )
+            if keyword not in involved_items and keyword not in event_blob:
+                continue
+            timeline_hits.append(
+                {
+                    "id": int(event.id),
+                    "chapter_number": int(event.chapter_number or 0),
+                    "title": _short_text(event.event_title, max_length=36),
+                }
+            )
+            if len(timeline_hits) >= 8:
+                break
+
+        foreshadowing_hits: List[Dict[str, Any]] = []
+        for foreshadowing in foreshadowings:
+            related_characters = [
+                _normalize_match_text(name)
+                for name in (foreshadowing.related_characters or [])
+                if _normalize_match_text(name)
+            ]
+            keywords = [
+                _normalize_match_text(name)
+                for name in (foreshadowing.keywords or [])
+                if _normalize_match_text(name)
+            ]
+            foreshadowing_blob = _normalize_match_text(
+                " ".join(
+                    [
+                        str(foreshadowing.content or ""),
+                        str(foreshadowing.author_note or ""),
+                        str(foreshadowing.type or ""),
+                        " ".join(related_characters),
+                        " ".join(keywords),
+                    ]
+                )
+            )
+            if keyword not in related_characters and keyword not in foreshadowing_blob:
+                continue
+            foreshadowing_hits.append(
+                {
+                    "id": int(foreshadowing.id),
+                    "chapter_number": int(foreshadowing.chapter_number or 0),
+                    "status": str(foreshadowing.status or "open"),
+                    "content": _short_content(foreshadowing.content, max_length=54),
+                }
+            )
+            if len(foreshadowing_hits) >= 8:
+                break
+
+        if timeline_hits or foreshadowing_hits:
+            base_meta = node.meta if isinstance(node.meta, dict) else {}
+            node.meta = {
+                **base_meta,
+                "graph_links": {
+                    "timeline": timeline_hits,
+                    "foreshadowings": foreshadowing_hits,
+                    "timeline_count": len(timeline_hits),
+                    "foreshadowing_count": len(foreshadowing_hits),
+                },
+            }
+
     relation_nodes = list(graph_nodes.values())
     stats = {
         "world_tree_nodes": len(world_nodes),
@@ -911,6 +1028,182 @@ async def get_world_graph(
         },
         stats=stats,
     )
+
+
+@router.get("/{project_id}/quality-dashboard")
+async def get_project_quality_dashboard(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """项目质量看板：聚合一致性、伏笔回收、章节完成度与稳定性。"""
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    chapters = (
+        await session.execute(
+            select(Chapter)
+            .options(selectinload(Chapter.selected_version))
+            .where(Chapter.project_id == project_id)
+            .order_by(Chapter.chapter_number.asc())
+        )
+    ).scalars().all()
+
+    total_chapters = len(chapters)
+    successful_statuses = {"successful"}
+    failed_statuses = {"failed", "evaluation_failed"}
+    successful_chapters = sum(
+        1 for item in chapters if str(item.status or "").strip().lower() in successful_statuses
+    )
+    failed_chapters = sum(
+        1 for item in chapters if str(item.status or "").strip().lower() in failed_statuses
+    )
+    avg_word_count = round(
+        (sum(int(item.word_count or 0) for item in chapters) / total_chapters), 2
+    ) if total_chapters else 0.0
+
+    severity_breakdown: Dict[str, int] = {"critical": 0, "major": 0, "minor": 0}
+    checked_versions = 0
+    consistent_versions = 0
+    violation_count = 0
+    for chapter in chapters:
+        selected_version = chapter.selected_version
+        if not selected_version:
+            continue
+        metadata = selected_version.metadata if isinstance(selected_version.metadata, dict) else {}
+        report = metadata.get("consistency_report")
+        if not isinstance(report, dict):
+            continue
+        checked_versions += 1
+        if bool(report.get("is_consistent")):
+            consistent_versions += 1
+        violations = report.get("violations")
+        if isinstance(violations, list):
+            violation_count += len(violations)
+            for item in violations:
+                if not isinstance(item, dict):
+                    continue
+                severity = str(item.get("severity") or "minor").strip().lower() or "minor"
+                severity_breakdown[severity] = severity_breakdown.get(severity, 0) + 1
+
+    if checked_versions > 0:
+        consistency_score = round((consistent_versions / checked_versions) * 100, 2)
+    else:
+        consistency_score = 60.0 if total_chapters > 0 else 100.0
+
+    foreshadowing_analysis = (
+        await session.execute(
+            select(ForeshadowingAnalysis).where(ForeshadowingAnalysis.project_id == project_id)
+        )
+    ).scalar_one_or_none()
+    if foreshadowing_analysis:
+        foreshadowing_total = int(foreshadowing_analysis.total_foreshadowings or 0)
+        foreshadowing_resolved = int(foreshadowing_analysis.resolved_count or 0)
+        foreshadowing_unresolved = int(foreshadowing_analysis.unresolved_count or 0)
+        foreshadowing_quality = float(foreshadowing_analysis.overall_quality_score or 0.0)
+    else:
+        foreshadowing_rows = (
+            await session.execute(
+                select(Foreshadowing).where(Foreshadowing.project_id == project_id)
+            )
+        ).scalars().all()
+        foreshadowing_total = len(foreshadowing_rows)
+        foreshadowing_resolved = sum(
+            1
+            for item in foreshadowing_rows
+            if str(item.status or "").strip().lower() in {"resolved", "revealed", "paid_off"}
+        )
+        foreshadowing_unresolved = max(0, foreshadowing_total - foreshadowing_resolved)
+        foreshadowing_quality = 0.0
+
+    if foreshadowing_total > 0:
+        resolve_ratio = foreshadowing_resolved / max(1, foreshadowing_total)
+        quality_ratio = (foreshadowing_quality / 10.0) if foreshadowing_quality > 0 else resolve_ratio
+        foreshadowing_score = round(max(0.0, min(100.0, quality_ratio * 100.0)), 2)
+    else:
+        foreshadowing_score = 75.0
+
+    timeline_rows = (
+        await session.execute(
+            select(TimelineEvent).where(TimelineEvent.project_id == project_id)
+        )
+    ).scalars().all()
+    timeline_event_count = len(timeline_rows)
+    turning_points = sum(1 for item in timeline_rows if bool(item.is_turning_point))
+
+    completion_score = round((successful_chapters / total_chapters) * 100, 2) if total_chapters else 100.0
+    stability_score = (
+        round(max(0.0, 100.0 - (failed_chapters / total_chapters) * 100.0), 2)
+        if total_chapters
+        else 100.0
+    )
+    overall_score = round(
+        consistency_score * 0.35
+        + foreshadowing_score * 0.25
+        + completion_score * 0.25
+        + stability_score * 0.15,
+        2,
+    )
+
+    top_risks: List[str] = []
+    if consistency_score < 70:
+        top_risks.append("章节一致性得分偏低，建议优先处理关键冲突。")
+    if foreshadowing_total > 0 and foreshadowing_unresolved > foreshadowing_resolved:
+        top_risks.append("未回收伏笔数量偏高，存在剧情遗留风险。")
+    if total_chapters > 0 and completion_score < 55:
+        top_risks.append("章节完成率较低，建议先推进核心章节产出。")
+    if total_chapters > 0 and failed_chapters > 0:
+        top_risks.append("存在失败章节记录，建议排查模型或提示词配置。")
+    if total_chapters > 0 and timeline_event_count == 0:
+        top_risks.append("尚未维护时间线事件，后续可能出现时间逻辑冲突。")
+
+    recommendations: List[str] = []
+    if checked_versions < max(1, successful_chapters):
+        recommendations.append("对已完成章节补做一致性检查，并生成修复版本。")
+    if foreshadowing_total == 0:
+        recommendations.append("为关键转折章节补充伏笔，提升长线张力。")
+    elif foreshadowing_unresolved > 0:
+        recommendations.append("优先处理高重要度未回收伏笔，缩短未闭环周期。")
+    if timeline_event_count < max(3, total_chapters // 6):
+        recommendations.append("补充时间线关键节点，减少跨章冲突。")
+    if not recommendations:
+        recommendations.append("当前质量状态稳定，可继续扩展章节产能并定期复检。")
+
+    return {
+        "project_id": project_id,
+        "generated_at": datetime.utcnow().isoformat(),
+        "overall_score": overall_score,
+        "metrics": {
+            "consistency_score": consistency_score,
+            "foreshadowing_score": foreshadowing_score,
+            "completion_score": completion_score,
+            "stability_score": stability_score,
+        },
+        "chapter_stats": {
+            "total_chapters": total_chapters,
+            "successful_chapters": successful_chapters,
+            "failed_chapters": failed_chapters,
+            "average_word_count": avg_word_count,
+        },
+        "consistency": {
+            "checked_versions": checked_versions,
+            "consistent_versions": consistent_versions,
+            "violation_count": violation_count,
+            "severity_breakdown": severity_breakdown,
+        },
+        "foreshadowing": {
+            "total": foreshadowing_total,
+            "resolved": foreshadowing_resolved,
+            "unresolved": foreshadowing_unresolved,
+            "overall_quality_score": round(foreshadowing_quality, 2),
+        },
+        "timeline": {
+            "event_count": timeline_event_count,
+            "turning_points": turning_points,
+        },
+        "top_risks": top_risks,
+        "recommendations": recommendations,
+    }
 
 
 @router.put("/{project_id}/factions")

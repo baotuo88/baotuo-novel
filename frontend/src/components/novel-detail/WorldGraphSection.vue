@@ -130,6 +130,30 @@
     <div v-if="selectedNode" class="detail-card">
       <div class="detail-title">{{ selectedNode.label }}</div>
       <div class="detail-meta">类型：{{ selectedNode.node_type }} / 分组：{{ selectedNode.group }}</div>
+      <div v-if="selectedNodeLinks.timeline.length || selectedNodeLinks.foreshadowings.length" class="detail-links">
+        <div v-if="selectedNodeLinks.timeline.length" class="detail-link-group">
+          <div class="detail-link-group-title">关联时间线</div>
+          <button
+            v-for="item in selectedNodeLinks.timeline"
+            :key="`timeline-link-${item.id}`"
+            class="detail-link-btn"
+            @click="navigateToTimeline(item)"
+          >
+            第{{ item.chapter_number }}章 · {{ item.title }}
+          </button>
+        </div>
+        <div v-if="selectedNodeLinks.foreshadowings.length" class="detail-link-group">
+          <div class="detail-link-group-title">关联伏笔</div>
+          <button
+            v-for="item in selectedNodeLinks.foreshadowings"
+            :key="`foreshadowing-link-${item.id}`"
+            class="detail-link-btn"
+            @click="navigateToForeshadowing(item)"
+          >
+            第{{ item.chapter_number }}章 · {{ item.content }}
+          </button>
+        </div>
+      </div>
       <pre class="detail-json">{{ JSON.stringify(selectedNode.meta || {}, null, 2) }}</pre>
     </div>
 
@@ -225,6 +249,19 @@ interface CharacterRelationshipItem {
   description: string
 }
 
+interface TimelineGraphLinkItem {
+  id: number
+  chapter_number: number
+  title: string
+}
+
+interface ForeshadowingGraphLinkItem {
+  id: number
+  chapter_number: number
+  status: string
+  content: string
+}
+
 const props = defineProps<{
   data: WorldGraphResponse | null
   editable?: boolean
@@ -233,6 +270,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'refresh'): void
+  (e: 'navigate', payload: {
+    section: 'timeline' | 'foreshadowing'
+    chapterNumber?: number
+    eventId?: number
+    foreshadowingId?: number
+  }): void
 }>()
 
 const activeTab = ref<'tree' | 'graph'>('tree')
@@ -263,8 +306,47 @@ const shortLabel = (value: string, maxLength = 12) => {
   return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value
 }
 
+const selectedNodeLinks = computed(() => {
+  const meta = selectedNode.value?.meta
+  const graphLinks = (meta && typeof meta === 'object' ? (meta as Record<string, any>).graph_links : null) as Record<string, any> | null
+  const timelineRaw = Array.isArray(graphLinks?.timeline) ? graphLinks?.timeline : []
+  const foreshadowingRaw = Array.isArray(graphLinks?.foreshadowings) ? graphLinks?.foreshadowings : []
+  const timeline = timelineRaw
+    .map((item: any) => ({
+      id: Number(item?.id || 0),
+      chapter_number: Number(item?.chapter_number || 0),
+      title: String(item?.title || '')
+    }))
+    .filter((item: TimelineGraphLinkItem) => item.id > 0)
+  const foreshadowings = foreshadowingRaw
+    .map((item: any) => ({
+      id: Number(item?.id || 0),
+      chapter_number: Number(item?.chapter_number || 0),
+      status: String(item?.status || ''),
+      content: String(item?.content || '')
+    }))
+    .filter((item: ForeshadowingGraphLinkItem) => item.id > 0)
+  return { timeline, foreshadowings }
+})
+
 const selectNode = (node: GraphNode) => {
   selectedNode.value = node
+}
+
+const navigateToTimeline = (item: TimelineGraphLinkItem) => {
+  emit('navigate', {
+    section: 'timeline',
+    chapterNumber: item.chapter_number,
+    eventId: item.id
+  })
+}
+
+const navigateToForeshadowing = (item: ForeshadowingGraphLinkItem) => {
+  emit('navigate', {
+    section: 'foreshadowing',
+    chapterNumber: item.chapter_number,
+    foreshadowingId: item.id
+  })
 }
 
 const toCharacterRelationshipsFromGraph = () => {
@@ -527,13 +609,15 @@ const worldTreeLayout = computed(() => {
 const getWorldNodePos = (nodeId: string) => worldTreeLayout.value.pos.get(nodeId) || { x: 0, y: 0 }
 
 const relationLayout = computed(() => {
-  const width = 1000
-  const height = 620
   const pos = new Map<string, { x: number; y: number }>()
 
   const chars = relationNodes.value.filter((n) => n.group === 'character')
   const factionsInGraph = relationNodes.value.filter((n) => n.group === 'faction')
   const others = relationNodes.value.filter((n) => n.group !== 'character' && n.group !== 'faction')
+  const maxRingCount = Math.max(chars.length, factionsInGraph.length, 1)
+  const orbitRadius = Math.min(230, Math.max(110, 90 + maxRingCount * 10))
+  const width = Math.max(980, 760 + maxRingCount * 34)
+  const height = Math.max(620, 520 + Math.max(others.length, 1) * 24)
 
   const placeCircle = (
     nodes: GraphNode[],
@@ -555,9 +639,9 @@ const relationLayout = computed(() => {
     })
   }
 
-  placeCircle(chars, width * 0.28, height * 0.44, 180)
-  placeCircle(factionsInGraph, width * 0.72, height * 0.44, 180)
-  placeCircle(others, width * 0.5, height * 0.82, 120)
+  placeCircle(chars, width * 0.28, height * 0.44, orbitRadius)
+  placeCircle(factionsInGraph, width * 0.72, height * 0.44, orbitRadius)
+  placeCircle(others, width * 0.5, height * 0.84, Math.max(90, orbitRadius * 0.68))
 
   return { width, height, pos }
 })
@@ -718,6 +802,39 @@ const getRelationNodePos = (nodeId: string) => relationLayout.value.pos.get(node
   margin-top: 4px;
   font-size: 12px;
   color: #64748b;
+}
+
+.detail-links {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.detail-link-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-link-group-title {
+  font-size: 12px;
+  color: #334155;
+  font-weight: 700;
+}
+
+.detail-link-btn {
+  border: 1px solid #dbe3f0;
+  background: #f8fbff;
+  color: #1d4ed8;
+  border-radius: 8px;
+  font-size: 12px;
+  text-align: left;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.detail-link-btn:hover {
+  background: #eef5ff;
 }
 
 .detail-json {

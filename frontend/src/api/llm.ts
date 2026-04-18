@@ -110,10 +110,13 @@ export interface UserSubscriptionUsageSummary {
   is_active: boolean;
   daily_request_used: number;
   daily_request_limit: number;
+  daily_request_remaining: number;
   daily_request_ratio: number;
   today_estimated_cost_usd: number;
   daily_budget_limit_usd: number;
+  daily_budget_remaining_usd: number;
   daily_budget_ratio: number;
+  reset_at: string;
   warning_level: 'ok' | 'warning' | 'critical' | 'exceeded' | string;
 }
 
@@ -177,6 +180,32 @@ export const getMySubscriptionBilling = async (params: {
     throw new Error('获取订阅账单明细失败');
   }
   return response.json();
+};
+
+export const downloadMySubscriptionBillingCsv = async (params: {
+  hours?: number;
+  limit?: number;
+} = {}): Promise<void> => {
+  const query = new URLSearchParams();
+  if (params.hours != null) query.set('hours', String(params.hours));
+  if (params.limit != null) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  const response = await fetch(`/api/auth/subscription/billing/export.csv${qs ? `?${qs}` : ''}`, {
+    method: 'GET',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error('导出订阅账单失败');
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `subscription_billing_${Date.now()}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
 };
 
 export const testLLMConnection = async (

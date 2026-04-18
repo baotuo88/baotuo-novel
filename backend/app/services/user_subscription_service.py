@@ -1,7 +1,7 @@
 # AIMETA P=用户订阅服务_订阅查询和管理|R=订阅状态判断_管理员设置|NR=不含支付网关|E=UserSubscriptionService|X=internal|A=服务类|D=sqlalchemy|S=db|RD=./README.ai
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -300,6 +300,11 @@ class UserSubscriptionService:
             if daily_request_limit > 0
             else 0.0
         )
+        daily_request_remaining = (
+            max(0, daily_request_limit - daily_request_used)
+            if daily_request_limit > 0
+            else -1
+        )
 
         day_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         today_estimated_cost_usd = float(
@@ -320,6 +325,12 @@ class UserSubscriptionService:
             if daily_budget_limit_usd > 0
             else 0.0
         )
+        daily_budget_remaining_usd = (
+            round(max(0.0, daily_budget_limit_usd - today_estimated_cost_usd), 6)
+            if daily_budget_limit_usd > 0
+            else 0.0
+        )
+        reset_at = (day_start + timedelta(days=1)).replace(tzinfo=timezone.utc)
 
         warning_raw = await self._get_system_config_value("llm.budget.alert.thresholds")
         warning_threshold, critical_threshold = self._parse_thresholds(warning_raw)
@@ -336,10 +347,13 @@ class UserSubscriptionService:
             is_active=basic.is_active,
             daily_request_used=daily_request_used,
             daily_request_limit=daily_request_limit,
+            daily_request_remaining=daily_request_remaining,
             daily_request_ratio=daily_request_ratio,
             today_estimated_cost_usd=today_estimated_cost_usd,
             daily_budget_limit_usd=round(daily_budget_limit_usd, 6),
+            daily_budget_remaining_usd=daily_budget_remaining_usd,
             daily_budget_ratio=daily_budget_ratio,
+            reset_at=reset_at,
             warning_level=warning_level,
         )
 

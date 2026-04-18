@@ -735,6 +735,7 @@ async def _build_writer_task_center_response(
             latest_task_by_chapter[chapter_no] = task
 
     now = datetime.utcnow()
+    stale_threshold_seconds = _resolve_stale_generation_seconds()
     items: list[WriterTaskCenterItem] = []
     active_count = 0
     failed_count = 0
@@ -745,6 +746,10 @@ async def _build_writer_task_center_response(
         latest_task = latest_task_by_chapter.get(chapter.chapter_number)
         item_status = status_value
         failure_category: Optional[str] = None
+        stalled = False
+        stalled_seconds = 0
+        self_heal_hint: Optional[str] = None
+        can_force_retry = False
 
         if latest_task:
             queue_state = _queue_state_from_task_status(latest_task.status)
@@ -765,6 +770,29 @@ async def _build_writer_task_center_response(
                     status_message=latest_task.status_message,
                     stage_label=latest_task.stage_label,
                 )
+            heartbeat_at = latest_task.heartbeat_at or latest_task.updated_at or latest_task.started_at
+            heartbeat_age_seconds = _compute_age_seconds(heartbeat_at)
+            if queue_state == "active" and heartbeat_age_seconds is not None:
+                stalled_seconds = int(heartbeat_age_seconds)
+                if heartbeat_age_seconds >= stale_threshold_seconds:
+                    stalled = True
+                    self_heal_hint = (
+                        f"检测到任务心跳超过 {stale_threshold_seconds}s，系统会自动恢复；"
+                        "也可点击“强制重试”立即重启。"
+                    )
+                elif heartbeat_age_seconds >= max(30, int(stale_threshold_seconds * 0.6)):
+                    self_heal_hint = (
+                        f"任务持续运行 {int(heartbeat_age_seconds)}s，系统正在监控自愈，无需重复提交。"
+                    )
+            if queue_state == "active" and "自动重试" in str(status_message or ""):
+                self_heal_hint = (
+                    "任务已进入自动重试流程，系统会在回退倒计时后重新执行。"
+                )
+            can_force_retry = bool(
+                queue_state == "active"
+                and int(latest_task.user_id) == int(user_id)
+                and (stalled or "自动重试" in str(status_message or ""))
+            )
         else:
             queue_state = _writer_queue_state(status_value)
             progress_percent, stage_label, status_message = _writer_progress(status_value)
@@ -790,6 +818,16 @@ async def _build_writer_task_center_response(
         if getattr(updated_at, "tzinfo", None) is not None:
             updated_at = updated_at.replace(tzinfo=None)
         age_minutes = max(0, int((now - updated_at).total_seconds() // 60))
+        if not latest_task and queue_state == "active":
+            stale_seconds_guess = max(0, int((now - updated_at).total_seconds()))
+            stalled_seconds = stale_seconds_guess
+            if stale_seconds_guess >= stale_threshold_seconds:
+                stalled = True
+                self_heal_hint = (
+                    f"章节状态已超过 {stale_threshold_seconds}s 未更新，"
+                    "建议执行“强制重试”以恢复任务。"
+                )
+                can_force_retry = True
 
         if queue_state == "failed" and not error_message and chapter.evaluations:
             failed_evals = [
@@ -826,6 +864,10 @@ async def _build_writer_task_center_response(
                 age_minutes=age_minutes,
                 error_message=error_message,
                 failure_category=failure_category,
+                stalled=stalled,
+                stalled_seconds=stalled_seconds,
+                self_heal_hint=self_heal_hint,
+                can_force_retry=can_force_retry,
             )
         )
 
@@ -1282,13 +1324,17 @@ async def fix_chapter_consistency(
                 selected_version_id=chapter.selected_version_id,
             )
 
-        fixed_content = await consistency_service.auto_fix(
-            project_id=project_id,
-            chapter_text=chapter_text,
-            violations=violations_to_fix,
-            user_id=current_user.id,
-        )
-        normalized_fixed = str(fixed_content or "").strip()
+        manual_fixed_content = str(payload.fixed_content or "").strip()
+        if manual_fixed_content:
+            normalized_fixed = manual_fixed_content
+        else:
+            fixed_content = await consistency_service.auto_fix(
+                project_id=project_id,
+                chapter_text=chapter_text,
+                violations=violations_to_fix,
+                user_id=current_user.id,
+            )
+            normalized_fixed = str(fixed_content or "").strip()
         if not normalized_fixed:
             return ConsistencyFixResponse(
                 project_id=project_id,
@@ -1304,8 +1350,27 @@ async def fix_chapter_consistency(
                 chapter_number=chapter_number,
                 fixed=False,
                 review=report,
-                message="自动修复结果与原文一致，无需新增版本",
+                message=(
+                    "修复预览与原文一致，无需应用"
+                    if payload.preview_only
+                    else "自动修复结果与原文一致，无需新增版本"
+                ),
                 selected_version_id=chapter.selected_version_id,
+                preview_only=bool(payload.preview_only),
+                preview_base_content=chapter_text.strip() if payload.preview_only else None,
+                preview_content=normalized_fixed if payload.preview_only else None,
+            )
+        if payload.preview_only:
+            return ConsistencyFixResponse(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                fixed=False,
+                review=report,
+                message="已生成一致性修复预览，确认后可应用",
+                selected_version_id=chapter.selected_version_id,
+                preview_only=True,
+                preview_base_content=chapter_text.strip(),
+                preview_content=normalized_fixed,
             )
 
         fix_label = f"consistency-fix-{datetime.utcnow().strftime('%m%d%H%M%S')}"
@@ -1344,6 +1409,7 @@ async def fix_chapter_consistency(
                 if payload.auto_select
                 else "一致性修复完成，已新增修复版本"
             ),
+            preview_only=False,
         )
     except HTTPException:
         raise
