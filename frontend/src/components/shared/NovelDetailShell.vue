@@ -250,6 +250,8 @@ import ChapterOutlineSection from '@/components/novel-detail/ChapterOutlineSecti
 import ChaptersSection from '@/components/novel-detail/ChaptersSection.vue'
 import EmotionCurveSection from '@/components/novel-detail/EmotionCurveSection.vue'
 import ForeshadowingSection from '@/components/novel-detail/ForeshadowingSection.vue'
+import TimelineSection from '@/components/novel-detail/TimelineSection.vue'
+import TerminologySection from '@/components/novel-detail/TerminologySection.vue'
 import WorldGraphSection from '@/components/novel-detail/WorldGraphSection.vue'
 
 interface Props {
@@ -277,6 +279,8 @@ const sections: Array<{ key: SectionKey; label: string; description: string }> =
   ...(!props.isAdmin
     ? [{ key: 'world_graph' as SectionKey, label: '世界图谱', description: '结构树与关系网' }]
     : []),
+  { key: 'timeline', label: '故事时间线', description: '章节事件与时间锚点' },
+  { key: 'terminology', label: '术语词典', description: '名称统一与生成约束' },
   { key: 'chapter_outline', label: '章节大纲', description: props.isAdmin ? '故事章节规划' : '故事结构规划' },
   { key: 'chapters', label: '章节内容', description: props.isAdmin ? '生成章节与正文' : '生成状态与摘要' },
   { key: 'emotion_curve', label: '情感曲线', description: '追踪章节情感变化' },
@@ -289,6 +293,8 @@ const sectionComponents: Record<SectionKey, any> = {
   characters: CharactersSection,
   relationships: RelationshipsSection,
   world_graph: WorldGraphSection,
+  timeline: TimelineSection,
+  terminology: TerminologySection,
   chapter_outline: ChapterOutlineSection,
   chapters: ChaptersSection,
   emotion_curve: EmotionCurveSection,
@@ -323,6 +329,16 @@ const getSectionIcon = (key: SectionKey) => {
       h('circle', { cx: 12, cy: 18, r: 2 }),
       h('path', { d: 'M8 6h8M7.5 7.2l3.8 8M16.5 7.2l-3.8 8' })
     ]),
+    timeline: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
+      h('circle', { cx: 5, cy: 6, r: 1.5 }),
+      h('circle', { cx: 5, cy: 12, r: 1.5 }),
+      h('circle', { cx: 5, cy: 18, r: 1.5 }),
+      h('path', { d: 'M8 6h12M8 12h12M8 18h12' })
+    ]),
+    terminology: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
+      h('path', { d: 'M4 4h16v16H4z' }),
+      h('path', { d: 'M8 8h8M8 12h8M8 16h5' })
+    ]),
     chapter_outline: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
       h('line', { x1: 8, y1: 6, x2: 21, y2: 6 }),
       h('line', { x1: 8, y1: 12, x2: 21, y2: 12 }),
@@ -352,6 +368,8 @@ const sectionLoading = reactive<Record<SectionKey, boolean>>({
   characters: false,
   relationships: false,
   world_graph: false,
+  timeline: false,
+  terminology: false,
   chapter_outline: false,
   chapters: false,
   emotion_curve: false,
@@ -363,6 +381,8 @@ const sectionError = reactive<Record<SectionKey, string | null>>({
   characters: null,
   relationships: null,
   world_graph: null,
+  timeline: null,
+  terminology: null,
   chapter_outline: null,
   chapters: null,
   emotion_curve: null,
@@ -464,7 +484,7 @@ const loadSection = async (section: SectionKey, force = false) => {
   }
   
   // 分析型Section使用独立的API，不需要在这里加载
-  const analysisSections: SectionKey[] = ['emotion_curve', 'foreshadowing']
+  const analysisSections: SectionKey[] = ['emotion_curve', 'foreshadowing', 'timeline', 'terminology']
   if (analysisSections.includes(section)) {
     return
   }
@@ -534,6 +554,21 @@ const componentProps = computed(() => {
     case 'world_graph':
       return {
         data: data || null,
+        editable,
+        projectId
+      }
+    case 'timeline':
+      return {
+        editable,
+        projectId
+      }
+    case 'terminology':
+      return {
+        editable,
+        projectId
+      }
+    case 'foreshadowing':
+      return {
         editable,
         projectId
       }

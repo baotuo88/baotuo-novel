@@ -111,6 +111,7 @@ class PipelineOrchestrator:
         outline_summary = outline.summary or "暂无摘要"
 
         preset_context = await self.prompt_service.get_active_writing_preset_context(project_id=project_id)
+        project_memory = await self._get_project_memory(project_id)
         raw_writing_notes = (writing_notes or "").strip()
         writing_notes_parts: List[str] = []
         preset_notes_prefix = str(preset_context.get("writing_notes_prefix") or "").strip() if preset_context else ""
@@ -118,6 +119,9 @@ class PipelineOrchestrator:
             writing_notes_parts.append(preset_notes_prefix)
         if raw_writing_notes:
             writing_notes_parts.append(raw_writing_notes)
+        terminology_constraints_text = self._build_terminology_constraints_text(project_memory)
+        if terminology_constraints_text:
+            writing_notes_parts.append(terminology_constraints_text)
         writing_notes = "\n".join(writing_notes_parts) if writing_notes_parts else "无额外写作指令"
 
         all_characters = [c.get("name") for c in blueprint_dict.get("characters", []) if c.get("name")]
@@ -178,7 +182,7 @@ class PipelineOrchestrator:
                 involved_characters=introduced_characters,
             )
 
-        project_memory_text = await self._get_project_memory_text(project_id)
+        project_memory_text = self._format_project_memory_text(project_memory)
 
         rag_context = None
         knowledge_context = None
@@ -729,19 +733,122 @@ class PipelineOrchestrator:
         stats["mode"] = "two_stage"
         return context_text, stats
 
-    async def _get_project_memory_text(self, project_id: str) -> Optional[str]:
+    async def _get_project_memory(self, project_id: str) -> Optional[ProjectMemory]:
         result = await self.session.execute(
             select(ProjectMemory).where(ProjectMemory.project_id == project_id)
         )
-        memory = result.scalars().first()
+        return result.scalars().first()
+
+    @staticmethod
+    def _normalize_terminology_entries(raw_items: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw_items, list):
+            return []
+
+        normalized: List[Dict[str, Any]] = []
+        seen_terms: set[str] = set()
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+
+            term = str(item.get("term") or "").strip()
+            if not term:
+                continue
+            term_key = term.lower()
+            if term_key in seen_terms:
+                continue
+
+            canonical = str(item.get("canonical") or "").strip() or term
+            canonical_key = canonical.lower()
+            aliases: List[str] = []
+            seen_aliases: set[str] = set()
+            aliases_raw = item.get("aliases")
+            if isinstance(aliases_raw, list):
+                for alias in aliases_raw:
+                    alias_text = str(alias or "").strip()
+                    if not alias_text:
+                        continue
+                    alias_key = alias_text.lower()
+                    if alias_key in seen_aliases or alias_key == canonical_key:
+                        continue
+                    aliases.append(alias_text)
+                    seen_aliases.add(alias_key)
+
+            normalized.append(
+                {
+                    "term": term,
+                    "canonical": canonical,
+                    "aliases": aliases,
+                    "category": str(item.get("category") or "").strip() or None,
+                    "note": str(item.get("note") or "").strip() or None,
+                    "enforce": bool(item.get("enforce", True)),
+                }
+            )
+            seen_terms.add(term_key)
+
+        normalized.sort(key=lambda entry: entry["term"].lower())
+        return normalized
+
+    def _build_terminology_constraints_text(self, memory: Optional[ProjectMemory]) -> Optional[str]:
+        if not memory or not isinstance(memory.extra, dict):
+            return None
+
+        entries = self._normalize_terminology_entries(memory.extra.get("terminology_dictionary"))
+        enforced_entries = [item for item in entries if bool(item.get("enforce", True))]
+        if not enforced_entries:
+            return None
+
+        lines: List[str] = []
+        for item in enforced_entries[:30]:
+            term = str(item.get("term") or "").strip()
+            canonical = str(item.get("canonical") or "").strip() or term
+            aliases = [str(alias).strip() for alias in (item.get("aliases") or []) if str(alias).strip()]
+            note = str(item.get("note") or "").strip()
+
+            suffix_parts: List[str] = []
+            if aliases:
+                suffix_parts.append(f"别名：{'、'.join(aliases)}")
+            if note:
+                suffix_parts.append(f"说明：{note}")
+            suffix = f"（{'；'.join(suffix_parts)}）" if suffix_parts else ""
+
+            if canonical == term and not aliases:
+                lines.append(f"- 术语“{canonical}”保持固定写法{suffix}")
+            else:
+                lines.append(f"- 术语“{term}”统一写作“{canonical}”{suffix}")
+
+        if not lines:
+            return None
+        return "【术语词典一致性约束】\n涉及以下术语时必须统一使用规范写法，不得混用：\n" + "\n".join(lines)
+
+    def _format_project_memory_text(self, memory: Optional[ProjectMemory]) -> Optional[str]:
         if not memory:
             return None
 
-        parts = []
+        parts: List[str] = []
         if memory.global_summary:
             parts.append(f"### 全局摘要\n{memory.global_summary}")
+        if memory.story_timeline_summary:
+            parts.append(f"### 故事时间线摘要\n{memory.story_timeline_summary}")
         if memory.plot_arcs:
             parts.append("### 剧情线追踪\n" + json.dumps(memory.plot_arcs, ensure_ascii=False, indent=2))
+
+        terminology_entries: List[Dict[str, Any]] = []
+        if isinstance(memory.extra, dict):
+            terminology_entries = self._normalize_terminology_entries(memory.extra.get("terminology_dictionary"))
+        if terminology_entries:
+            glossary_lines: List[str] = []
+            for item in terminology_entries[:20]:
+                term = str(item.get("term") or "").strip()
+                canonical = str(item.get("canonical") or "").strip() or term
+                aliases = [str(alias).strip() for alias in (item.get("aliases") or []) if str(alias).strip()]
+                category = str(item.get("category") or "").strip()
+                note = str(item.get("note") or "").strip()
+                prefix = f"[{category}] " if category else ""
+                alias_text = f"（别名：{'、'.join(aliases)}）" if aliases else ""
+                note_text = f"；备注：{note}" if note else ""
+                glossary_lines.append(f"- {prefix}{term} -> {canonical}{alias_text}{note_text}")
+            parts.append("### 术语词典\n" + "\n".join(glossary_lines))
+
         if not parts:
             return None
         return "\n\n".join(parts)

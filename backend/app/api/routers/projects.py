@@ -11,6 +11,7 @@ from ...core.dependencies import get_current_user
 from ...db.session import get_session
 from ...models.faction import FactionRelationship
 from ...models.novel import Chapter
+from ...models.memory_layer import TimelineEvent
 from ...schemas.user import UserInDB
 from ...services.constitution_service import ConstitutionService
 from ...services.faction_service import FactionService
@@ -80,6 +81,30 @@ class FactionRelationshipPayload(BaseModel):
     reason: Optional[str] = None
 
 
+class TimelineEventPayload(BaseModel):
+    chapter_number: int = Field(..., ge=1)
+    story_time: Optional[str] = None
+    story_date: Optional[str] = None
+    time_elapsed: Optional[str] = None
+    event_type: Optional[str] = "minor"
+    event_title: str
+    event_description: Optional[str] = None
+    involved_characters: List[str] = Field(default_factory=list)
+    location: Optional[str] = None
+    importance: int = Field(default=5, ge=1, le=10)
+    is_turning_point: bool = False
+    extra: Optional[Dict[str, Any]] = None
+
+
+class TerminologyEntryPayload(BaseModel):
+    term: str
+    canonical: Optional[str] = None
+    aliases: List[str] = Field(default_factory=list)
+    category: Optional[str] = None
+    note: Optional[str] = None
+    enforce: bool = True
+
+
 class GraphNode(BaseModel):
     id: str
     label: str
@@ -110,6 +135,78 @@ def _model_to_dict(instance: Any) -> Optional[Dict[str, Any]]:
     if instance is None:
         return None
     return {k: v for k, v in vars(instance).items() if not k.startswith("_")}
+
+
+def _serialize_timeline_event(event: TimelineEvent) -> Dict[str, Any]:
+    return {
+        "id": int(event.id),
+        "project_id": str(event.project_id),
+        "chapter_number": int(event.chapter_number),
+        "story_time": event.story_time,
+        "story_date": event.story_date,
+        "time_elapsed": event.time_elapsed,
+        "event_type": event.event_type,
+        "event_title": event.event_title,
+        "event_description": event.event_description,
+        "involved_characters": list(event.involved_characters or []),
+        "location": event.location,
+        "importance": int(event.importance or 5),
+        "is_turning_point": bool(event.is_turning_point),
+        "extra": event.extra if isinstance(event.extra, dict) else {},
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+    }
+
+
+def _normalize_terminology_entries(items: List[Any]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    seen_terms: set[str] = set()
+    for item in items:
+        if isinstance(item, TerminologyEntryPayload):
+            raw = item.model_dump()
+        elif isinstance(item, dict):
+            raw = item
+        else:
+            continue
+
+        term = str(raw.get("term") or "").strip()
+        if not term:
+            continue
+        term_key = term.lower()
+        if term_key in seen_terms:
+            continue
+
+        canonical = str(raw.get("canonical") or "").strip() or term
+        aliases_raw = raw.get("aliases") or []
+        aliases: List[str] = []
+        seen_aliases: set[str] = set()
+        if isinstance(aliases_raw, list):
+            for alias in aliases_raw:
+                value = str(alias or "").strip()
+                if not value:
+                    continue
+                alias_key = value.lower()
+                if alias_key in seen_aliases or alias_key == canonical.lower():
+                    continue
+                aliases.append(value)
+                seen_aliases.add(alias_key)
+
+        category = str(raw.get("category") or "").strip() or None
+        note = str(raw.get("note") or "").strip() or None
+        enforce = bool(raw.get("enforce", True))
+
+        normalized.append(
+            {
+                "term": term,
+                "canonical": canonical,
+                "aliases": aliases,
+                "category": category,
+                "note": note,
+                "enforce": enforce,
+            }
+        )
+        seen_terms.add(term_key)
+    normalized.sort(key=lambda item: item["term"].lower())
+    return normalized
 
 
 def _short_text(value: Any, max_length: int = 72) -> str:
@@ -421,6 +518,140 @@ async def get_character_states(
         "chapter_number": chapter_number,
         "states": [_model_to_dict(state) for state in states],
     }
+
+
+@router.get("/{project_id}/timeline")
+async def get_project_timeline(
+    project_id: str,
+    start_chapter: Optional[int] = None,
+    end_chapter: Optional[int] = None,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> Dict[str, Any]:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    memory_service = MemoryLayerService(session, LLMService(session), PromptService(session))
+    events = await memory_service.get_timeline(
+        project_id=project_id,
+        start_chapter=start_chapter,
+        end_chapter=end_chapter,
+    )
+    return {
+        "project_id": project_id,
+        "start_chapter": start_chapter,
+        "end_chapter": end_chapter,
+        "events": [_serialize_timeline_event(event) for event in events],
+    }
+
+
+@router.put("/{project_id}/timeline")
+async def put_project_timeline(
+    project_id: str,
+    payload: List[TimelineEventPayload] = Body(...),
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> Dict[str, Any]:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    await session.execute(delete(TimelineEvent).where(TimelineEvent.project_id == project_id))
+
+    sorted_payload = sorted(payload, key=lambda item: (item.chapter_number, item.event_title))
+    for item in sorted_payload:
+        session.add(
+            TimelineEvent(
+                project_id=project_id,
+                chapter_number=int(item.chapter_number),
+                story_time=(item.story_time or "").strip() or None,
+                story_date=(item.story_date or "").strip() or None,
+                time_elapsed=(item.time_elapsed or "").strip() or None,
+                event_type=(item.event_type or "minor").strip() or "minor",
+                event_title=(item.event_title or "").strip() or f"第{item.chapter_number}章事件",
+                event_description=(item.event_description or "").strip() or None,
+                involved_characters=[str(name).strip() for name in (item.involved_characters or []) if str(name).strip()],
+                location=(item.location or "").strip() or None,
+                importance=max(1, min(10, int(item.importance or 5))),
+                is_turning_point=bool(item.is_turning_point),
+                extra=item.extra if isinstance(item.extra, dict) else None,
+            )
+        )
+
+    memory_result = await session.execute(
+        select(ProjectMemory).where(ProjectMemory.project_id == project_id)
+    )
+    memory = memory_result.scalars().first()
+    if not memory:
+        memory = ProjectMemory(project_id=project_id, extra={})
+        session.add(memory)
+
+    summary_lines: List[str] = []
+    for item in sorted_payload[:24]:
+        title = (item.event_title or "").strip()
+        if not title:
+            continue
+        summary_lines.append(f"第{item.chapter_number}章：{title}")
+    memory.story_timeline_summary = "\n".join(summary_lines) if summary_lines else None
+
+    await session.commit()
+
+    memory_service = MemoryLayerService(session, LLMService(session), PromptService(session))
+    events = await memory_service.get_timeline(project_id=project_id)
+    return {
+        "project_id": project_id,
+        "updated_count": len(events),
+        "events": [_serialize_timeline_event(event) for event in events],
+    }
+
+
+@router.get("/{project_id}/terminology-dictionary")
+async def get_terminology_dictionary(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> Dict[str, Any]:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    result = await session.execute(
+        select(ProjectMemory).where(ProjectMemory.project_id == project_id)
+    )
+    memory = result.scalars().first()
+    raw_items: List[Any] = []
+    if memory and isinstance(memory.extra, dict):
+        value = memory.extra.get("terminology_dictionary")
+        if isinstance(value, list):
+            raw_items = value
+
+    items = _normalize_terminology_entries(raw_items)
+    return {"project_id": project_id, "items": items}
+
+
+@router.put("/{project_id}/terminology-dictionary")
+async def put_terminology_dictionary(
+    project_id: str,
+    payload: List[TerminologyEntryPayload] = Body(...),
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> Dict[str, Any]:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    normalized_items = _normalize_terminology_entries(payload)
+    result = await session.execute(
+        select(ProjectMemory).where(ProjectMemory.project_id == project_id)
+    )
+    memory = result.scalars().first()
+    if not memory:
+        memory = ProjectMemory(project_id=project_id, extra={})
+        session.add(memory)
+
+    memory_extra = memory.extra if isinstance(memory.extra, dict) else {}
+    updated_extra = {**memory_extra, "terminology_dictionary": normalized_items}
+    memory.extra = updated_extra
+
+    await session.commit()
+    return {"project_id": project_id, "items": normalized_items, "count": len(normalized_items)}
 
 
 @router.get("/{project_id}/factions")

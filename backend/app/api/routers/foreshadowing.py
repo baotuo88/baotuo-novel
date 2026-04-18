@@ -2,13 +2,16 @@
 """伏笔管理 API 接口"""
 import logging
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.session import get_session
 from ...services.foreshadowing_service import ForeshadowingService
 from ...models.foreshadowing import Foreshadowing, ForeshadowingReminder, ForeshadowingAnalysis
+from ...models.novel import Chapter
 from ...core.dependencies import get_current_user
+from ...services.novel_service import NovelService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/novels", tags=["foreshadowing"])
@@ -20,7 +23,7 @@ from pydantic import BaseModel
 
 class ForeshadowingCreate(BaseModel):
     """创建伏笔请求"""
-    chapter_id: int
+    chapter_id: Optional[int] = None
     chapter_number: int
     content: str
     type: str
@@ -30,11 +33,16 @@ class ForeshadowingCreate(BaseModel):
 
 class ForeshadowingResolve(BaseModel):
     """标记伏笔回收请求"""
-    resolved_chapter_id: int
+    resolved_chapter_id: Optional[int] = None
     resolved_chapter_number: int
     resolution_text: str
     resolution_type: str = "direct"
     quality_score: Optional[int] = None
+
+
+class ForeshadowingAbandon(BaseModel):
+    """放弃伏笔请求"""
+    reason: Optional[str] = None
 
 
 class ForeshadowingResponse(BaseModel):
@@ -73,6 +81,53 @@ class AnalysisResponse(BaseModel):
     recommendations: List[str]
 
 
+async def _ensure_project_owner(
+    *,
+    project_id: str,
+    session: AsyncSession,
+    current_user,
+) -> NovelService:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+    return novel_service
+
+
+async def _ensure_project_chapter(
+    *,
+    project_id: str,
+    chapter_id: int,
+    session: AsyncSession,
+) -> Chapter:
+    result = await session.execute(
+        select(Chapter).where(
+            Chapter.id == chapter_id,
+            Chapter.project_id == project_id,
+        )
+    )
+    chapter = result.scalars().first()
+    if not chapter:
+        raise HTTPException(status_code=400, detail="chapter_id 不属于当前项目")
+    return chapter
+
+
+async def _ensure_project_foreshadowing(
+    *,
+    project_id: str,
+    foreshadowing_id: int,
+    session: AsyncSession,
+) -> Foreshadowing:
+    result = await session.execute(
+        select(Foreshadowing).where(
+            Foreshadowing.id == foreshadowing_id,
+            Foreshadowing.project_id == project_id,
+        )
+    )
+    foreshadowing = result.scalars().first()
+    if not foreshadowing:
+        raise HTTPException(status_code=404, detail="伏笔不存在")
+    return foreshadowing
+
+
 @router.post("/{project_id}/foreshadowings", response_model=ForeshadowingResponse)
 async def create_foreshadowing(
     project_id: str,
@@ -82,10 +137,27 @@ async def create_foreshadowing(
 ):
     """创建伏笔"""
     try:
+        novel_service = await _ensure_project_owner(
+            project_id=project_id,
+            session=session,
+            current_user=current_user,
+        )
+        chapter_id: int
+        if data.chapter_id:
+            chapter = await _ensure_project_chapter(
+                project_id=project_id,
+                chapter_id=int(data.chapter_id),
+                session=session,
+            )
+            chapter_id = int(chapter.id)
+        else:
+            chapter = await novel_service.get_or_create_chapter(project_id, data.chapter_number)
+            chapter_id = int(chapter.id)
+
         service = ForeshadowingService(session)
         foreshadowing = await service.create_foreshadowing(
             project_id=project_id,
-            chapter_id=data.chapter_id,
+            chapter_id=chapter_id,
             chapter_number=data.chapter_number,
             content=data.content,
             foreshadowing_type=data.type,
@@ -108,6 +180,8 @@ async def create_foreshadowing(
             author_note=foreshadowing.author_note,
             created_at=foreshadowing.created_at.isoformat(),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"创建伏笔失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -125,6 +199,11 @@ async def list_foreshadowings(
 ):
     """获取伏笔列表"""
     try:
+        await _ensure_project_owner(
+            project_id=project_id,
+            session=session,
+            current_user=current_user,
+        )
         service = ForeshadowingService(session)
         foreshadowings, total = await service.get_foreshadowings(
             project_id=project_id,
@@ -154,6 +233,8 @@ async def list_foreshadowings(
                 for f in foreshadowings
             ],
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"获取伏笔列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -169,10 +250,32 @@ async def resolve_foreshadowing(
 ):
     """标记伏笔回收"""
     try:
+        novel_service = await _ensure_project_owner(
+            project_id=project_id,
+            session=session,
+            current_user=current_user,
+        )
+        await _ensure_project_foreshadowing(
+            project_id=project_id,
+            foreshadowing_id=foreshadowing_id,
+            session=session,
+        )
+        resolved_chapter_id: int
+        if data.resolved_chapter_id:
+            chapter = await _ensure_project_chapter(
+                project_id=project_id,
+                chapter_id=int(data.resolved_chapter_id),
+                session=session,
+            )
+            resolved_chapter_id = int(chapter.id)
+        else:
+            chapter = await novel_service.get_or_create_chapter(project_id, data.resolved_chapter_number)
+            resolved_chapter_id = int(chapter.id)
+
         service = ForeshadowingService(session)
         resolution = await service.resolve_foreshadowing(
             foreshadowing_id=foreshadowing_id,
-            resolved_chapter_id=data.resolved_chapter_id,
+            resolved_chapter_id=resolved_chapter_id,
             resolved_chapter_number=data.resolved_chapter_number,
             resolution_text=data.resolution_text,
             resolution_type=data.resolution_type,
@@ -185,8 +288,48 @@ async def resolve_foreshadowing(
             "message": "伏笔已标记为回收",
             "resolution_id": resolution.id,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"标记伏笔回收失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{project_id}/foreshadowings/{foreshadowing_id}/abandon")
+async def abandon_foreshadowing(
+    project_id: str,
+    foreshadowing_id: int,
+    payload: ForeshadowingAbandon = Body(default=ForeshadowingAbandon()),
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """标记伏笔放弃"""
+    try:
+        await _ensure_project_owner(
+            project_id=project_id,
+            session=session,
+            current_user=current_user,
+        )
+        await _ensure_project_foreshadowing(
+            project_id=project_id,
+            foreshadowing_id=foreshadowing_id,
+            session=session,
+        )
+        service = ForeshadowingService(session)
+        foreshadowing = await service.abandon_foreshadowing(
+            foreshadowing_id=foreshadowing_id,
+            reason=payload.reason,
+        )
+        await session.commit()
+        return {
+            "status": "success",
+            "message": "伏笔已标记为放弃",
+            "foreshadowing_id": foreshadowing.id,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"标记伏笔放弃失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -199,6 +342,11 @@ async def get_reminders(
 ):
     """获取伏笔提醒"""
     try:
+        await _ensure_project_owner(
+            project_id=project_id,
+            session=session,
+            current_user=current_user,
+        )
         service = ForeshadowingService(session)
         reminders = await service.get_active_reminders(project_id=project_id, limit=limit)
         
@@ -216,6 +364,8 @@ async def get_reminders(
                 for r in reminders
             ],
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"获取提醒失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -231,6 +381,11 @@ async def dismiss_reminder(
 ):
     """忽略提醒"""
     try:
+        await _ensure_project_owner(
+            project_id=project_id,
+            session=session,
+            current_user=current_user,
+        )
         service = ForeshadowingService(session)
         reminder = await service.dismiss_reminder(reminder_id=reminder_id, reason=reason)
         await session.commit()
@@ -239,6 +394,8 @@ async def dismiss_reminder(
             "status": "success",
             "message": "提醒已忽略",
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"忽略提醒失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -252,6 +409,11 @@ async def get_analysis(
 ):
     """获取伏笔分析"""
     try:
+        await _ensure_project_owner(
+            project_id=project_id,
+            session=session,
+            current_user=current_user,
+        )
         service = ForeshadowingService(session)
         analysis = await service.analyze_foreshadowings(project_id=project_id)
         await session.commit()
@@ -268,6 +430,8 @@ async def get_analysis(
             "pattern_analysis": analysis.pattern_analysis or {},
             "analyzed_at": analysis.analyzed_at.isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"获取分析失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -358,7 +358,7 @@ export interface DeleteNovelsResponse {
 export type NovelSectionType = 'overview' | 'world_setting' | 'characters' | 'relationships' | 'chapter_outline' | 'chapters'
 
 // 分析型Section（不属于NovelSectionType，使用独立的analytics API）
-export type AnalysisSectionType = 'emotion_curve' | 'foreshadowing' | 'world_graph'
+export type AnalysisSectionType = 'emotion_curve' | 'foreshadowing' | 'world_graph' | 'timeline' | 'terminology'
 
 // 所有Section的联合类型
 export type AllSectionType = NovelSectionType | AnalysisSectionType
@@ -494,6 +494,117 @@ export interface WorldGraphResponse {
   }
 }
 
+export interface TimelineEventItem {
+  id?: number
+  project_id?: string
+  chapter_number: number
+  story_time?: string | null
+  story_date?: string | null
+  time_elapsed?: string | null
+  event_type?: string | null
+  event_title: string
+  event_description?: string | null
+  involved_characters: string[]
+  location?: string | null
+  importance: number
+  is_turning_point: boolean
+  extra?: Record<string, any> | null
+  created_at?: string | null
+}
+
+export interface ProjectTimelineResponse {
+  project_id: string
+  start_chapter?: number | null
+  end_chapter?: number | null
+  updated_count?: number
+  events: TimelineEventItem[]
+}
+
+export interface TerminologyEntryItem {
+  term: string
+  canonical?: string | null
+  aliases: string[]
+  category?: string | null
+  note?: string | null
+  enforce: boolean
+}
+
+export interface TerminologyDictionaryResponse {
+  project_id: string
+  items: TerminologyEntryItem[]
+  count?: number
+}
+
+export type ForeshadowingStatus = 'open' | 'planted' | 'developing' | 'partial' | 'resolved' | 'revealed' | 'paid_off' | 'abandoned' | string
+
+export interface ForeshadowingBoardItem {
+  id: number
+  chapter_number: number
+  content: string
+  type: string
+  status: ForeshadowingStatus
+  resolved_chapter_number?: number | null
+  is_manual: boolean
+  ai_confidence?: number | null
+  author_note?: string | null
+  created_at: string
+}
+
+export interface ForeshadowingListResponse {
+  total: number
+  limit: number
+  offset: number
+  data: ForeshadowingBoardItem[]
+}
+
+export interface ForeshadowingCreatePayload {
+  chapter_id?: number
+  chapter_number: number
+  content: string
+  type: string
+  keywords?: string[]
+  author_note?: string
+}
+
+export interface ForeshadowingResolvePayload {
+  resolved_chapter_id?: number
+  resolved_chapter_number: number
+  resolution_text: string
+  resolution_type?: string
+  quality_score?: number
+}
+
+export interface ForeshadowingAbandonPayload {
+  reason?: string
+}
+
+export interface ForeshadowingReminderItem {
+  id: number
+  foreshadowing_id: number
+  reminder_type: string
+  message: string
+  status: string
+  created_at: string
+}
+
+export interface ForeshadowingReminderListResponse {
+  total: number
+  data: ForeshadowingReminderItem[]
+}
+
+export interface ForeshadowingAnalysisResponse {
+  total_foreshadowings: number
+  resolved_count: number
+  unresolved_count: number
+  abandoned_count: number
+  avg_resolution_distance?: number | null
+  unresolved_ratio?: number | null
+  overall_quality_score?: number | null
+  recommendations: string[]
+  pattern_analysis?: Record<string, number>
+  analyzed_at?: string
+}
+
 // API 函数
 const NOVELS_BASE = `${API_BASE_URL}${API_PREFIX}/novels`
 const WRITER_PREFIX = '/api/writer'
@@ -533,6 +644,114 @@ export class NovelAPI {
 
   static async getWorldGraph(projectId: string): Promise<WorldGraphResponse> {
     return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/world-graph`)
+  }
+
+  static async getProjectTimeline(
+    projectId: string,
+    query: { start_chapter?: number; end_chapter?: number } = {}
+  ): Promise<ProjectTimelineResponse> {
+    const params = new URLSearchParams()
+    if (query.start_chapter != null) params.set('start_chapter', String(query.start_chapter))
+    if (query.end_chapter != null) params.set('end_chapter', String(query.end_chapter))
+    const queryString = params.toString()
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/timeline${queryString ? `?${queryString}` : ''}`)
+  }
+
+  static async saveProjectTimeline(
+    projectId: string,
+    events: TimelineEventItem[]
+  ): Promise<ProjectTimelineResponse> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/timeline`, {
+      method: 'PUT',
+      body: JSON.stringify(events)
+    })
+  }
+
+  static async getTerminologyDictionary(projectId: string): Promise<TerminologyDictionaryResponse> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/terminology-dictionary`)
+  }
+
+  static async saveTerminologyDictionary(
+    projectId: string,
+    items: TerminologyEntryItem[]
+  ): Promise<TerminologyDictionaryResponse> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/terminology-dictionary`, {
+      method: 'PUT',
+      body: JSON.stringify(items)
+    })
+  }
+
+  static async listForeshadowings(
+    projectId: string,
+    query: {
+      status?: string
+      foreshadowing_type?: string
+      limit?: number
+      offset?: number
+    } = {}
+  ): Promise<ForeshadowingListResponse> {
+    const params = new URLSearchParams()
+    if (query.status) params.set('status', query.status)
+    if (query.foreshadowing_type) params.set('foreshadowing_type', query.foreshadowing_type)
+    if (query.limit != null) params.set('limit', String(query.limit))
+    if (query.offset != null) params.set('offset', String(query.offset))
+    const queryString = params.toString()
+    return request(`${API_BASE_URL}${API_PREFIX}/novels/${projectId}/foreshadowings${queryString ? `?${queryString}` : ''}`)
+  }
+
+  static async createForeshadowing(
+    projectId: string,
+    payload: ForeshadowingCreatePayload
+  ): Promise<ForeshadowingBoardItem> {
+    return request(`${API_BASE_URL}${API_PREFIX}/novels/${projectId}/foreshadowings`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  }
+
+  static async resolveForeshadowing(
+    projectId: string,
+    foreshadowingId: number,
+    payload: ForeshadowingResolvePayload
+  ): Promise<{ status: string; message: string; resolution_id: number }> {
+    return request(`${API_BASE_URL}${API_PREFIX}/novels/${projectId}/foreshadowings/${foreshadowingId}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  }
+
+  static async abandonForeshadowing(
+    projectId: string,
+    foreshadowingId: number,
+    payload: ForeshadowingAbandonPayload = {}
+  ): Promise<{ status: string; message: string; foreshadowing_id: number }> {
+    return request(`${API_BASE_URL}${API_PREFIX}/novels/${projectId}/foreshadowings/${foreshadowingId}/abandon`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  }
+
+  static async getForeshadowingReminders(
+    projectId: string,
+    limit?: number
+  ): Promise<ForeshadowingReminderListResponse> {
+    const queryString = limit != null ? `?limit=${encodeURIComponent(String(limit))}` : ''
+    return request(`${API_BASE_URL}${API_PREFIX}/novels/${projectId}/foreshadowings/reminders${queryString}`)
+  }
+
+  static async dismissForeshadowingReminder(
+    projectId: string,
+    reminderId: number,
+    reason?: string
+  ): Promise<{ status: string; message: string }> {
+    const queryString = reason ? `?reason=${encodeURIComponent(reason)}` : ''
+    return request(`${API_BASE_URL}${API_PREFIX}/novels/${projectId}/foreshadowings/reminders/${reminderId}/dismiss${queryString}`, {
+      method: 'POST'
+    })
+  }
+
+  static async getForeshadowingAnalysis(projectId: string): Promise<ForeshadowingAnalysisResponse> {
+    return request(`${API_BASE_URL}${API_PREFIX}/novels/${projectId}/foreshadowings/analysis`)
   }
 
   static async getFactions(projectId: string): Promise<{ project_id: string; factions: FactionItem[] }> {

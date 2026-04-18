@@ -17,6 +17,11 @@ from ..models.novel import Chapter, NovelProject
 logger = logging.getLogger(__name__)
 
 
+_UNRESOLVED_STATUSES = {"open", "planted", "developing", "partial"}
+_RESOLVED_STATUSES = {"resolved", "revealed", "paid_off"}
+_ABANDONED_STATUSES = {"abandoned"}
+
+
 class ForeshadowingService:
     """伏笔管理服务"""
     
@@ -145,7 +150,7 @@ class ForeshadowingService:
         query = select(Foreshadowing).where(
             and_(
                 Foreshadowing.project_id == project_id,
-                Foreshadowing.status == "open",
+                Foreshadowing.status.in_(list(_UNRESOLVED_STATUSES)),
             )
         ).order_by(Foreshadowing.chapter_number)
         
@@ -219,14 +224,14 @@ class ForeshadowingService:
         
         # 统计
         total = len(foreshadowings)
-        resolved_count = sum(1 for f in foreshadowings if f.status == "resolved")
-        unresolved_count = sum(1 for f in foreshadowings if f.status == "open")
-        abandoned_count = sum(1 for f in foreshadowings if f.status == "abandoned")
+        resolved_count = sum(1 for f in foreshadowings if f.status in _RESOLVED_STATUSES)
+        unresolved_count = sum(1 for f in foreshadowings if f.status in _UNRESOLVED_STATUSES)
+        abandoned_count = sum(1 for f in foreshadowings if f.status in _ABANDONED_STATUSES)
         
         # 计算平均回收距离
         resolution_distances = []
         for f in foreshadowings:
-            if f.status == "resolved" and f.resolved_chapter_number:
+            if f.status in _RESOLVED_STATUSES and f.resolved_chapter_number:
                 distance = f.resolved_chapter_number - f.chapter_number
                 resolution_distances.append(distance)
         
