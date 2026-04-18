@@ -793,19 +793,25 @@ const getRelationNodePos = (nodeId: string) => relationLayout.value.pos.get(node
 }
 
 .row-char {
-  grid-template-columns: 1fr 1fr 1fr 1.5fr auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.5fr) auto;
 }
 
 .row-faction {
-  grid-template-columns: 1.4fr 1fr 1fr auto;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto;
 }
 
 .row-faction-rel {
-  grid-template-columns: 1fr 1fr 1fr 120px auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 120px auto;
+}
+
+.row-grid > * {
+  min-width: 0;
 }
 
 .row-grid input,
 .row-grid select {
+  width: 100%;
+  box-sizing: border-box;
   height: 34px;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
@@ -851,11 +857,28 @@ const getRelationNodePos = (nodeId: string) => relationLayout.value.pos.get(node
   color: #be123c;
 }
 
+@media (max-width: 1440px) {
+  .row-char,
+  .row-faction,
+  .row-faction-rel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .row-grid .danger-btn {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+}
+
 @media (max-width: 1024px) {
   .row-char,
   .row-faction,
   .row-faction-rel {
     grid-template-columns: 1fr;
+  }
+
+  .row-grid .danger-btn {
+    justify-self: start;
   }
 }
 </style>
