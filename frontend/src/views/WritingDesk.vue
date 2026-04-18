@@ -74,24 +74,26 @@
             <WDWorkspace
               :project="project"
               :selected-chapter-number="selectedChapterNumber"
-            :generating-chapter="generatingChapter"
-            :evaluating-chapter="evaluatingChapter"
-            :show-version-selector="showVersionSelector"
-            :chapter-generation-result="chapterGenerationResult"
-            :selected-version-index="selectedVersionIndex"
-            :available-versions="availableVersions"
-            :is-selecting-version="isSelectingVersion"
-            @regenerate-chapter="regenerateChapter"
-            @evaluate-chapter="evaluateChapter"
-            @hide-version-selector="hideVersionSelector"
-            @update:selected-version-index="selectedVersionIndex = $event"
-            @show-version-detail="showVersionDetail"
-            @confirm-version-selection="confirmVersionSelection"
-            @generate-chapter="generateChapter"
-            @show-evaluation-detail="showEvaluationDetailModal = true"
-            @fetch-chapter-status="fetchChapterStatus"
-            @edit-chapter="editChapterContent"
-            @version-rolled-back="handleVersionRolledBack"
+              :generating-chapter="generatingChapter"
+              :evaluating-chapter="evaluatingChapter"
+              :show-version-selector="showVersionSelector"
+              :chapter-generation-result="chapterGenerationResult"
+              :selected-version-index="selectedVersionIndex"
+              :available-versions="availableVersions"
+              :is-selecting-version="isSelectingVersion"
+              @regenerate-chapter="regenerateChapter"
+              @evaluate-chapter="evaluateChapter"
+              @hide-version-selector="hideVersionSelector"
+              @update:selected-version-index="selectedVersionIndex = $event"
+              @show-version-detail="showVersionDetail"
+              @confirm-version-selection="confirmVersionSelection"
+              @generate-chapter="generateChapter"
+              @show-evaluation-detail="showEvaluationDetailModal = true"
+              @fetch-chapter-status="fetchChapterStatus"
+              @edit-chapter="editChapterContent"
+              @version-rolled-back="handleVersionRolledBack"
+              @open-world-graph="showWorldGraphModal = true"
+              @chapter-updated="handleChapterUpdated"
             />
           </div>
         </div>
@@ -129,6 +131,12 @@
       @close="showGenerateOutlineModal = false"
       @generate="handleGenerateOutline"
     />
+    <WDWorldGraphModal
+      :show="showWorldGraphModal"
+      :project-id="project?.id || null"
+      @close="showWorldGraphModal = false"
+      @graph-updated="handleWorldGraphUpdated"
+    />
   </div>
 </template>
 
@@ -156,6 +164,7 @@ import WDEvaluationDetailModal from '@/components/writing-desk/WDEvaluationDetai
 import WDEditChapterModal from '@/components/writing-desk/WDEditChapterModal.vue'
 import WDGenerateOutlineModal from '@/components/writing-desk/WDGenerateOutlineModal.vue'
 import WDTaskCenter from '@/components/writing-desk/WDTaskCenter.vue'
+import WDWorldGraphModal from '@/components/writing-desk/WDWorldGraphModal.vue'
 
 interface Props {
   id: string
@@ -180,6 +189,7 @@ const editingChapter = ref<ChapterOutline | null>(null)
 const isGeneratingOutline = ref(false)
 const showGenerateOutlineModal = ref(false)
 const showTaskCenter = ref(false)
+const showWorldGraphModal = ref(false)
 const writingPresets = ref<WritingPresetItem[]>([])
 const selectedPresetId = ref('')
 const presetLoading = ref(false)
@@ -467,7 +477,7 @@ const availableVersions = computed(() => {
 const loadWritingPresets = async () => {
   presetLoading.value = true
   try {
-    writingPresets.value = await NovelAPI.listWriterPresets()
+    writingPresets.value = await NovelAPI.listWriterPresets(props.id)
     selectedPresetId.value = activeWritingPreset.value?.preset_id || ''
   } catch (error) {
     console.error('加载写作预设失败:', error)
@@ -479,10 +489,10 @@ const loadWritingPresets = async () => {
 const applyWritingPreset = async () => {
   presetApplying.value = true
   try {
-    await NovelAPI.setActiveWriterPreset(selectedPresetId.value || null)
+    await NovelAPI.setActiveWriterPreset(selectedPresetId.value || null, props.id)
     await loadWritingPresets()
     presetCollapseToken.value += 1
-    globalAlert.showSuccess('写作预设已应用', 'Preset')
+    globalAlert.showSuccess('写作预设已应用到当前项目', 'Preset')
   } catch (error) {
     globalAlert.showError(`预设应用失败: ${error instanceof Error ? error.message : '未知错误'}`, 'Preset')
   } finally {
@@ -1093,6 +1103,24 @@ const handleVersionRolledBack = async (chapterNumber: number) => {
     globalAlert.showSuccess(`第${chapterNumber}章已完成版本回滚`, '操作成功')
   } catch (error) {
     globalAlert.showError(`回滚后刷新失败: ${error instanceof Error ? error.message : '未知错误'}`)
+  }
+}
+
+const handleChapterUpdated = async (chapterNumber: number) => {
+  try {
+    await novelStore.loadChapter(chapterNumber)
+    await novelStore.loadProject(props.id, true)
+    syncGenerationIndicators()
+  } catch (error) {
+    console.error('章节更新后刷新失败:', error)
+  }
+}
+
+const handleWorldGraphUpdated = async () => {
+  try {
+    await novelStore.loadProject(props.id, true)
+  } catch (error) {
+    console.error('图谱更新后刷新项目失败:', error)
   }
 }
 

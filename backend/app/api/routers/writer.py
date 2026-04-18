@@ -39,6 +39,8 @@ from ...schemas.novel import (
     ChapterVersionDetail,
     ChapterVersionRollbackRequest,
     ChapterVersionRollbackResponse,
+    ConsistencyFixRequest,
+    ConsistencyFixResponse,
     DeleteChapterRequest,
     EditChapterRequest,
     EvaluateChapterRequest,
@@ -99,6 +101,11 @@ _WRITER_FAILED_STATUSES = {
 }
 _WRITER_DONE_STATUSES = {ChapterGenerationStatus.SUCCESSFUL.value}
 _CHAPTER_SUBMIT_LOCKS: dict[str, asyncio.Lock] = {}
+_CONSISTENCY_SEVERITY_ORDER = {
+    "critical": 0,
+    "major": 1,
+    "minor": 2,
+}
 
 
 def _build_writer_task_id(project_id: str, chapter_number: int) -> str:
@@ -155,6 +162,45 @@ def _format_consistency_report(result: Any) -> Dict[str, Any]:
             for v in (result.violations or [])
         ],
     }
+
+
+def _build_consistency_suggestions(review: Dict[str, Any]) -> List[Dict[str, Any]]:
+    suggestions: List[Dict[str, Any]] = []
+    for index, item in enumerate(review.get("violations") or [], start=1):
+        severity = str(item.get("severity") or "minor").strip().lower() or "minor"
+        category = str(item.get("category") or "unknown").strip() or "unknown"
+        description = str(item.get("description") or "").strip() or "检测到一致性风险"
+        suggested_fix = str(item.get("suggested_fix") or "").strip()
+        label = f"[{severity}] {category}"
+        suggestions.append(
+            {
+                "action_id": f"consistency-fix-{index}",
+                "severity": severity,
+                "category": category,
+                "title": label,
+                "description": description,
+                "suggested_fix": suggested_fix,
+                "confidence": float(item.get("confidence") or 0.0),
+                "auto_fix_recommended": severity in {"critical", "major"},
+            }
+        )
+    return suggestions
+
+
+def _resolve_consistency_text(chapter: Chapter) -> Tuple[str, Optional[ChapterVersion]]:
+    selected_version = chapter.selected_version
+    if not selected_version and chapter.versions:
+        selected_version = sorted(
+            chapter.versions,
+            key=lambda item: item.created_at.timestamp() if item.created_at else 0.0,
+        )[-1]
+
+    chapter_text = ""
+    if selected_version and selected_version.content:
+        chapter_text = selected_version.content
+    else:
+        chapter_text = str(getattr(chapter, "content", "") or "")
+    return chapter_text, selected_version
 
 
 def _writer_queue_state(status_value: str) -> Literal["active", "failed", "done", "other"]:
@@ -270,6 +316,18 @@ async def list_writing_presets(
     return await prompt_service.list_writing_presets()
 
 
+@router.get("/novels/{project_id}/presets", response_model=List[WritingPresetRead])
+async def list_project_writing_presets(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> List[WritingPresetRead]:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+    prompt_service = PromptService(session)
+    return await prompt_service.list_writing_presets(project_id=project_id)
+
+
 @router.put("/presets/active", response_model=Optional[WritingPresetRead])
 async def set_active_writing_preset(
     payload: WritingPresetActivateRequest,
@@ -279,6 +337,25 @@ async def set_active_writing_preset(
     prompt_service = PromptService(session)
     try:
         return await prompt_service.activate_writing_preset(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.put("/novels/{project_id}/presets/active", response_model=Optional[WritingPresetRead])
+async def set_active_project_writing_preset(
+    project_id: str,
+    payload: WritingPresetActivateRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> Optional[WritingPresetRead]:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+    prompt_service = PromptService(session)
+    try:
+        return await prompt_service.activate_writing_preset_for_project(
+            project_id=project_id,
+            payload=payload,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1095,18 +1172,7 @@ async def check_chapter_consistency(
         if not chapter:
             raise HTTPException(status_code=404, detail="章节不存在")
 
-        selected_version = chapter.selected_version
-        if not selected_version and chapter.versions:
-            selected_version = sorted(
-                chapter.versions,
-                key=lambda item: item.created_at.timestamp() if item.created_at else 0.0,
-            )[-1]
-
-        chapter_text = ""
-        if selected_version and selected_version.content:
-            chapter_text = selected_version.content
-        elif chapter.content:
-            chapter_text = chapter.content
+        chapter_text, selected_version = _resolve_consistency_text(chapter)
 
         if not chapter_text.strip():
             raise HTTPException(status_code=400, detail="章节内容为空，无法执行一致性检查")
@@ -1128,10 +1194,14 @@ async def check_chapter_consistency(
             selected_version.metadata = meta
             await session.commit()
 
+        suggestions = _build_consistency_suggestions(report)
+        auto_fix_available = any(item.get("auto_fix_recommended") for item in suggestions)
         return {
             "project_id": project_id,
             "chapter_number": chapter_number,
             "review": report,
+            "action_suggestions": suggestions,
+            "auto_fix_available": auto_fix_available,
         }
     except HTTPException:
         raise
@@ -1146,6 +1216,148 @@ async def check_chapter_consistency(
         raise HTTPException(
             status_code=500,
             detail="一致性检查服务暂时不可用，请稍后重试。若持续失败请联系管理员检查日志。",
+        ) from exc
+
+
+@router.post(
+    "/novels/{project_id}/chapters/{chapter_number}/consistency-fix",
+    response_model=ConsistencyFixResponse,
+)
+async def fix_chapter_consistency(
+    project_id: str,
+    chapter_number: int,
+    payload: ConsistencyFixRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> ConsistencyFixResponse:
+    try:
+        novel_service = NovelService(session)
+        await novel_service.ensure_project_owner(project_id, current_user.id)
+
+        stmt = (
+            select(Chapter)
+            .options(
+                selectinload(Chapter.versions),
+                selectinload(Chapter.selected_version),
+            )
+            .where(
+                Chapter.project_id == project_id,
+                Chapter.chapter_number == chapter_number,
+            )
+        )
+        chapter = (await session.execute(stmt)).scalars().first()
+        if not chapter:
+            raise HTTPException(status_code=404, detail="章节不存在")
+
+        chapter_text, selected_version = _resolve_consistency_text(chapter)
+        if not chapter_text.strip():
+            raise HTTPException(status_code=400, detail="章节内容为空，无法执行一致性修复")
+
+        sync_session = getattr(session, "sync_session", session)
+        consistency_service = ConsistencyService(sync_session, LLMService(session))
+        result = await consistency_service.check_consistency(
+            project_id=project_id,
+            chapter_text=chapter_text,
+            user_id=current_user.id,
+            include_foreshadowing=True,
+        )
+        report = _format_consistency_report(result)
+        min_rank = _CONSISTENCY_SEVERITY_ORDER.get(str(payload.min_severity).strip().lower(), 1)
+        violations_to_fix = []
+        for item in result.violations:
+            severity_key = (
+                item.severity.value if hasattr(item.severity, "value") else str(item.severity)
+            )
+            severity_rank = _CONSISTENCY_SEVERITY_ORDER.get(str(severity_key).strip().lower(), 2)
+            if severity_rank <= min_rank:
+                violations_to_fix.append(item)
+
+        if not violations_to_fix:
+            return ConsistencyFixResponse(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                fixed=False,
+                review=report,
+                message="未检测到需要自动修复的问题",
+                selected_version_id=chapter.selected_version_id,
+            )
+
+        fixed_content = await consistency_service.auto_fix(
+            project_id=project_id,
+            chapter_text=chapter_text,
+            violations=violations_to_fix,
+            user_id=current_user.id,
+        )
+        normalized_fixed = str(fixed_content or "").strip()
+        if not normalized_fixed:
+            return ConsistencyFixResponse(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                fixed=False,
+                review=report,
+                message="自动修复未返回有效内容",
+                selected_version_id=chapter.selected_version_id,
+            )
+        if normalized_fixed == chapter_text.strip():
+            return ConsistencyFixResponse(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                fixed=False,
+                review=report,
+                message="自动修复结果与原文一致，无需新增版本",
+                selected_version_id=chapter.selected_version_id,
+            )
+
+        fix_label = f"consistency-fix-{datetime.utcnow().strftime('%m%d%H%M%S')}"
+        new_version = ChapterVersion(
+            chapter_id=chapter.id,
+            content=normalized_fixed,
+            version_label=fix_label,
+            metadata={
+                "source": "consistency_auto_fix",
+                "min_severity": payload.min_severity,
+                "fixed_from_version_id": selected_version.id if selected_version else None,
+                "consistency_report": report,
+                "fixed_at": datetime.utcnow().isoformat(),
+            },
+        )
+        session.add(new_version)
+        await session.flush()
+
+        selected_version_id = chapter.selected_version_id
+        if payload.auto_select:
+            chapter.selected_version_id = new_version.id
+            chapter.status = ChapterGenerationStatus.SUCCESSFUL.value
+            chapter.word_count = len(normalized_fixed)
+            selected_version_id = new_version.id
+
+        await session.commit()
+        return ConsistencyFixResponse(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            fixed=True,
+            review=report,
+            created_version_id=new_version.id,
+            selected_version_id=selected_version_id,
+            message=(
+                "一致性修复完成并已设为当前版本"
+                if payload.auto_select
+                else "一致性修复完成，已新增修复版本"
+            ),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "项目 %s 第 %s 章一致性修复接口异常: user_id=%s error=%s",
+            project_id,
+            chapter_number,
+            current_user.id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="一致性修复服务暂时不可用，请稍后重试。若持续失败请联系管理员检查日志。",
         ) from exc
 
 

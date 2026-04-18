@@ -22,6 +22,7 @@ _LOCK = asyncio.Lock()
 _LOADED = False
 _WRITING_PRESET_CONFIG_KEY = "writer.presets.catalog"
 _WRITING_PRESET_ACTIVE_KEY = "writer.preset.active_id"
+_WRITING_PRESET_PROJECT_ACTIVE_KEY_PREFIX = "writer.preset.project.active_id."
 
 _BUILTIN_WRITING_PRESETS: list[dict] = [
     {
@@ -220,8 +221,51 @@ class PromptService:
             )
         )
 
-    async def list_writing_presets(self) -> list[WritingPresetRead]:
-        active_preset_id = await self._get_active_preset_id()
+    @staticmethod
+    def _project_active_key(project_id: str) -> str:
+        return f"{_WRITING_PRESET_PROJECT_ACTIVE_KEY_PREFIX}{project_id}"
+
+    async def _get_project_active_preset_id(self, project_id: str) -> Optional[str]:
+        pid = str(project_id or "").strip()
+        if not pid:
+            return None
+        record = await self.system_config_repo.get_by_key(self._project_active_key(pid))
+        if not record or not record.value:
+            return None
+        value = record.value.strip()
+        return value or None
+
+    async def _set_project_active_preset_id(self, project_id: str, preset_id: Optional[str]) -> None:
+        pid = str(project_id or "").strip()
+        if not pid:
+            return
+        key = self._project_active_key(pid)
+        record = await self.system_config_repo.get_by_key(key)
+        value = (preset_id or "").strip()
+        if record:
+            record.value = value
+            if not record.description:
+                record.description = f"项目 {pid} 启用的写作预设 ID。"
+            return
+
+        from ..models import SystemConfig
+
+        self.session.add(
+            SystemConfig(
+                key=key,
+                value=value,
+                description=f"项目 {pid} 启用的写作预设 ID。",
+            )
+        )
+
+    async def list_writing_presets(self, *, project_id: Optional[str] = None) -> list[WritingPresetRead]:
+        global_active_preset_id = await self._get_active_preset_id()
+        project_active_preset_id = (
+            await self._get_project_active_preset_id(project_id)
+            if project_id
+            else None
+        )
+        effective_active_preset_id = project_active_preset_id or global_active_preset_id
         custom_items = await self._load_custom_writing_presets()
         merged: dict[str, WritingPresetRead] = {}
 
@@ -230,7 +274,7 @@ class PromptService:
                 {
                     **builtin,
                     "is_builtin": True,
-                    "is_active": active_preset_id == builtin["preset_id"],
+                    "is_active": effective_active_preset_id == builtin["preset_id"],
                 }
             )
             merged[item.preset_id] = item
@@ -240,7 +284,7 @@ class PromptService:
                 {
                     **custom,
                     "is_builtin": False,
-                    "is_active": active_preset_id == custom["preset_id"],
+                    "is_active": effective_active_preset_id == custom["preset_id"],
                 }
             )
             merged[item.preset_id] = item
@@ -315,15 +359,46 @@ class PromptService:
 
         return WritingPresetRead.model_validate({**target.model_dump(), "is_active": True})
 
-    async def get_active_writing_preset(self) -> Optional[WritingPresetRead]:
-        active_preset_id = await self._get_active_preset_id()
+    async def activate_writing_preset_for_project(
+        self,
+        *,
+        project_id: str,
+        payload: WritingPresetActivateRequest,
+    ) -> Optional[WritingPresetRead]:
+        pid = str(project_id or "").strip()
+        if not pid:
+            raise ValueError("project_id 无效")
+
+        preset_id = (payload.preset_id or "").strip() or None
+        if preset_id is None:
+            await self._set_project_active_preset_id(pid, None)
+            await self.session.commit()
+            # 清空项目绑定后，返回项目生效预设（可能是全局预设，也可能为空）
+            return await self.get_active_writing_preset(project_id=pid)
+
+        presets = await self.list_writing_presets(project_id=pid)
+        target = next((item for item in presets if item.preset_id == preset_id), None)
+        if not target:
+            raise ValueError("预设不存在")
+
+        await self._set_project_active_preset_id(pid, preset_id)
+        await self.session.commit()
+        return WritingPresetRead.model_validate({**target.model_dump(), "is_active": True})
+
+    async def get_active_writing_preset(self, *, project_id: Optional[str] = None) -> Optional[WritingPresetRead]:
+        project_active_preset_id = (
+            await self._get_project_active_preset_id(project_id)
+            if project_id
+            else None
+        )
+        active_preset_id = project_active_preset_id or await self._get_active_preset_id()
         if not active_preset_id:
             return None
-        presets = await self.list_writing_presets()
+        presets = await self.list_writing_presets(project_id=project_id)
         return next((item for item in presets if item.preset_id == active_preset_id), None)
 
-    async def get_active_writing_preset_context(self) -> dict:
-        preset = await self.get_active_writing_preset()
+    async def get_active_writing_preset_context(self, *, project_id: Optional[str] = None) -> dict:
+        preset = await self.get_active_writing_preset(project_id=project_id)
         if not preset:
             return {}
         style_rules = [rule.strip() for rule in preset.style_rules if rule and rule.strip()]

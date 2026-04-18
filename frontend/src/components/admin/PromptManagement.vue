@@ -128,6 +128,13 @@
             <n-space justify="end">
               <n-button
                 quaternary
+                :disabled="!selectedPreset"
+                @click="duplicatePreset"
+              >
+                复制预设
+              </n-button>
+              <n-button
+                quaternary
                 type="warning"
                 :disabled="!selectedPreset || selectedPreset.is_active"
                 :loading="presetActivating"
@@ -579,6 +586,43 @@ const selectPreset = (preset: WritingPresetItem) => {
 const newPreset = () => {
   selectedPreset.value = null
   resetPresetForm()
+}
+
+const buildDuplicatePresetId = (sourceId: string): string => {
+  const normalized = sourceId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+  const base = `${normalized || 'preset'}-copy`.slice(0, 28)
+  let candidate = base
+  let index = 2
+  const exists = (presetId: string) => presets.value.some((item) => item.preset_id === presetId)
+  while (exists(candidate)) {
+    const suffix = `-${index}`
+    const head = base.slice(0, Math.max(2, 32 - suffix.length))
+    candidate = `${head}${suffix}`
+    index += 1
+  }
+  return candidate
+}
+
+const duplicatePreset = () => {
+  if (!selectedPreset.value) return
+  const source = selectedPreset.value
+  const duplicatedId = buildDuplicatePresetId(source.preset_id)
+  selectedPreset.value = null
+  presetForm.preset_id = duplicatedId
+  presetForm.name = `${source.name} 副本`
+  presetForm.description = source.description || ''
+  presetForm.prompt_name = source.prompt_name || 'writing_v2'
+  presetForm.temperature = source.temperature
+  presetForm.top_p = source.top_p ?? null
+  presetForm.max_tokens = source.max_tokens ?? null
+  presetForm.style_rules = source.style_rules ? [...source.style_rules] : []
+  presetForm.writing_notes_prefix = source.writing_notes_prefix || ''
+  showAlert('已生成预设副本，请确认后保存', 'success')
 }
 
 const fetchPresets = async () => {

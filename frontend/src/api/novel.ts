@@ -431,11 +431,45 @@ export interface ConsistencyViolationItem {
   confidence?: number
 }
 
+export interface ConsistencyActionSuggestion {
+  action_id: string
+  severity: string
+  category: string
+  title: string
+  description: string
+  suggested_fix?: string | null
+  confidence?: number
+  auto_fix_recommended: boolean
+}
+
 export interface ChapterConsistencyReview {
   is_consistent: boolean
   summary: string
   check_time_ms: number
   violations: ConsistencyViolationItem[]
+}
+
+export interface ChapterConsistencyCheckResponse {
+  project_id: string
+  chapter_number: number
+  review: ChapterConsistencyReview
+  action_suggestions?: ConsistencyActionSuggestion[]
+  auto_fix_available?: boolean
+}
+
+export interface ChapterConsistencyFixPayload {
+  auto_select?: boolean
+  min_severity?: 'critical' | 'major' | 'minor'
+}
+
+export interface ChapterConsistencyFixResponse {
+  project_id: string
+  chapter_number: number
+  fixed: boolean
+  review: ChapterConsistencyReview
+  created_version_id?: number | null
+  selected_version_id?: number | null
+  message: string
 }
 
 export interface WorldGraphResponse {
@@ -523,12 +557,18 @@ export class NovelAPI {
     })
   }
 
-  static async listWriterPresets(): Promise<WritingPresetItem[]> {
+  static async listWriterPresets(projectId?: string): Promise<WritingPresetItem[]> {
+    if (projectId) {
+      return request(`${API_BASE_URL}${WRITER_PREFIX}/novels/${projectId}/presets`)
+    }
     return request(`${API_BASE_URL}${WRITER_PREFIX}/presets`)
   }
 
-  static async setActiveWriterPreset(presetId: string | null): Promise<WritingPresetItem | null> {
-    return request(`${API_BASE_URL}${WRITER_PREFIX}/presets/active`, {
+  static async setActiveWriterPreset(presetId: string | null, projectId?: string): Promise<WritingPresetItem | null> {
+    const endpoint = projectId
+      ? `${API_BASE_URL}${WRITER_PREFIX}/novels/${projectId}/presets/active`
+      : `${API_BASE_URL}${WRITER_PREFIX}/presets/active`
+    return request(endpoint, {
       method: 'PUT',
       body: JSON.stringify({ preset_id: presetId })
     })
@@ -677,9 +717,20 @@ export class NovelAPI {
   static async checkChapterConsistency(
     projectId: string,
     chapterNumber: number
-  ): Promise<{ project_id: string; chapter_number: number; review: ChapterConsistencyReview }> {
+  ): Promise<ChapterConsistencyCheckResponse> {
     return request(`${WRITER_BASE}/${projectId}/chapters/${chapterNumber}/consistency-check`, {
       method: 'POST'
+    })
+  }
+
+  static async fixChapterConsistency(
+    projectId: string,
+    chapterNumber: number,
+    payload: ChapterConsistencyFixPayload = {}
+  ): Promise<ChapterConsistencyFixResponse> {
+    return request(`${WRITER_BASE}/${projectId}/chapters/${chapterNumber}/consistency-fix`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
     })
   }
 

@@ -211,6 +211,21 @@ class EvaluateChapterRequest(BaseModel):
     chapter_number: int
 
 
+class ConsistencyFixRequest(BaseModel):
+    auto_select: bool = True
+    min_severity: Literal["critical", "major", "minor"] = "major"
+
+
+class ConsistencyFixResponse(BaseModel):
+    project_id: str
+    chapter_number: int
+    fixed: bool
+    review: Dict[str, Any]
+    created_version_id: Optional[int] = None
+    selected_version_id: Optional[int] = None
+    message: str
+
+
 class UpdateChapterOutlineRequest(BaseModel):
     chapter_number: int
     title: str

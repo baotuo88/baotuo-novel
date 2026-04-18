@@ -110,7 +110,7 @@ class PipelineOrchestrator:
         outline_title = outline.title or f"第{outline.chapter_number}章"
         outline_summary = outline.summary or "暂无摘要"
 
-        preset_context = await self.prompt_service.get_active_writing_preset_context()
+        preset_context = await self.prompt_service.get_active_writing_preset_context(project_id=project_id)
         raw_writing_notes = (writing_notes or "").strip()
         writing_notes_parts: List[str] = []
         preset_notes_prefix = str(preset_context.get("writing_notes_prefix") or "").strip() if preset_context else ""
