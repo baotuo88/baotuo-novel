@@ -80,6 +80,7 @@ from ...services.generation_task_service import (
     GenerationTaskService,
 )
 from ...utils.json_utils import remove_think_tags, unwrap_markdown_json
+from ...utils.task_failure import classify_task_failure
 from ...repositories.system_config_repository import SystemConfigRepository
 from ...services.pipeline_orchestrator import PipelineOrchestrator
 
@@ -97,10 +98,44 @@ _WRITER_FAILED_STATUSES = {
     ChapterGenerationStatus.EVALUATION_FAILED.value,
 }
 _WRITER_DONE_STATUSES = {ChapterGenerationStatus.SUCCESSFUL.value}
+_CHAPTER_SUBMIT_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def _build_writer_task_id(project_id: str, chapter_number: int) -> str:
     return f"{project_id}:{chapter_number}"
+
+
+def _chapter_submit_lock(project_id: str, chapter_number: int) -> asyncio.Lock:
+    key = _build_writer_task_id(project_id, chapter_number)
+    lock = _CHAPTER_SUBMIT_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _CHAPTER_SUBMIT_LOCKS[key] = lock
+    return lock
+
+
+def _request_id_from_request(request: Optional[Request]) -> str:
+    if request is None:
+        return ""
+    return str(getattr(request.state, "request_id", "") or "").strip()
+
+
+def _build_trace_context(
+    *,
+    request: Optional[Request],
+    action: str,
+    user_id: int,
+    project_id: str,
+    chapter_number: Optional[int] = None,
+) -> dict[str, Any]:
+    return {
+        "request_id": _request_id_from_request(request),
+        "action": action,
+        "user_id": int(user_id),
+        "project_id": project_id,
+        "chapter_number": chapter_number,
+        "requested_at": datetime.utcnow().isoformat(),
+    }
 
 
 def _format_consistency_report(result: Any) -> Dict[str, Any]:
@@ -632,6 +667,7 @@ async def _build_writer_task_center_response(
         status_value = (chapter.status or "not_generated").strip() or "not_generated"
         latest_task = latest_task_by_chapter.get(chapter.chapter_number)
         item_status = status_value
+        failure_category: Optional[str] = None
 
         if latest_task:
             queue_state = _queue_state_from_task_status(latest_task.status)
@@ -646,6 +682,12 @@ async def _build_writer_task_center_response(
             )
             can_retry = bool(latest_task.status in FAILED_TASK_STATUSES)
             error_message = latest_task.error_message if latest_task.status in FAILED_TASK_STATUSES else None
+            if latest_task.status in FAILED_TASK_STATUSES:
+                failure_category = classify_task_failure(
+                    error_message,
+                    status_message=latest_task.status_message,
+                    stage_label=latest_task.stage_label,
+                )
         else:
             queue_state = _writer_queue_state(status_value)
             progress_percent, stage_label, status_message = _writer_progress(status_value)
@@ -653,6 +695,12 @@ async def _build_writer_task_center_response(
             can_cancel = False
             can_retry = queue_state == "failed"
             error_message = None
+            if queue_state == "failed":
+                failure_category = classify_task_failure(
+                    None,
+                    status_message=status_message,
+                    stage_label=stage_label,
+                )
 
         if queue_state == "active":
             active_count += 1
@@ -700,6 +748,7 @@ async def _build_writer_task_center_response(
                 updated_at=updated_at,
                 age_minutes=age_minutes,
                 error_message=error_message,
+                failure_category=failure_category,
             )
         )
 
@@ -825,73 +874,94 @@ async def retry_writer_task(
     project_id: str,
     chapter_number: int,
     payload: WriterTaskCenterRetryRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user: UserInDB = Depends(get_current_user),
 ) -> WriterTaskCenterRetryResponse:
     novel_service = NovelService(session)
     task_service = GenerationTaskService(session)
     await novel_service.ensure_project_owner(project_id, current_user.id)
-
-    outline = await novel_service.get_outline(project_id, chapter_number)
-    if not outline:
-        raise HTTPException(status_code=400, detail="缺少章节大纲，无法重试生成")
-
-    chapter = await novel_service.get_or_create_chapter(project_id, chapter_number)
-    previous_status = (chapter.status or "not_generated").strip() or "not_generated"
-    active_task = await task_service.get_active_task(
-        project_id=project_id,
-        task_type=TASK_TYPE_CHAPTER_GENERATION,
-        chapter_number=chapter_number,
-    )
-    if active_task:
-        if not payload.force:
-            raise HTTPException(status_code=409, detail="任务正在执行中，若要重试请开启 force")
-        await task_service.request_cancel(active_task.id)
-        await generation_task_runner.cancel_running_task(active_task.id)
-
-    if previous_status not in _WRITER_FAILED_STATUSES and not payload.force:
-        raise HTTPException(status_code=400, detail="当前任务不是失败状态，若要重试请开启 force")
-
-    latest_failed_task = await task_service.get_latest_task(
-        project_id=project_id,
-        task_type=TASK_TYPE_CHAPTER_GENERATION,
-        chapter_number=chapter_number,
-        statuses={TASK_STATUS_FAILED, TASK_STATUS_CANCELED},
-    )
-    resume_variants: list[dict] = []
+    request_id = _request_id_from_request(request)
+    submit_lock = _chapter_submit_lock(project_id, chapter_number)
     resumed_variant_count = 0
-    if payload.resume_from_checkpoint and latest_failed_task and isinstance(latest_failed_task.checkpoint, dict):
-        maybe_variants = latest_failed_task.checkpoint.get("generated_variants")
-        if isinstance(maybe_variants, list):
-            resume_variants = [item for item in maybe_variants if isinstance(item, dict)]
-            resumed_variant_count = len(resume_variants)
+    previous_status = "not_generated"
 
-    chapter.real_summary = None
-    chapter.selected_version_id = None
-    chapter.status = ChapterGenerationStatus.GENERATING.value
-    flow_config: Dict[str, Any] = {"preset": "basic"}
-    requested_versions = await _resolve_version_count(session)
-    flow_config["versions"] = requested_versions
-    task = await task_service.create_task(
-        task_type=TASK_TYPE_CHAPTER_GENERATION,
-        project_id=project_id,
-        user_id=current_user.id,
-        chapter_number=chapter_number,
-        retry_count=(latest_failed_task.retry_count + 1) if latest_failed_task else 1,
-        resume_from_task_id=latest_failed_task.id if latest_failed_task else None,
-        payload={
-            "writing_notes": payload.writing_notes,
-            "flow_config": flow_config,
-            "resume_variants": resume_variants,
-        },
-    )
-    generation_task_runner.enqueue(task.id)
-    await session.commit()
+    async with submit_lock:
+        outline = await novel_service.get_outline(project_id, chapter_number)
+        if not outline:
+            raise HTTPException(status_code=400, detail="缺少章节大纲，无法重试生成")
+
+        chapter = await novel_service.get_or_create_chapter(project_id, chapter_number)
+        previous_status = (chapter.status or "not_generated").strip() or "not_generated"
+        active_task = await task_service.get_active_task(
+            project_id=project_id,
+            task_type=TASK_TYPE_CHAPTER_GENERATION,
+            chapter_number=chapter_number,
+        )
+        if active_task:
+            if not payload.force:
+                raise HTTPException(status_code=409, detail="任务正在执行中，若要重试请开启 force")
+            await task_service.request_cancel(active_task.id)
+            await generation_task_runner.cancel_running_task(active_task.id)
+
+        if previous_status not in _WRITER_FAILED_STATUSES and not payload.force:
+            raise HTTPException(status_code=400, detail="当前任务不是失败状态，若要重试请开启 force")
+
+        latest_failed_task = await task_service.get_latest_task(
+            project_id=project_id,
+            task_type=TASK_TYPE_CHAPTER_GENERATION,
+            chapter_number=chapter_number,
+            statuses={TASK_STATUS_FAILED, TASK_STATUS_CANCELED},
+        )
+        resume_variants: list[dict] = []
+        if payload.resume_from_checkpoint and latest_failed_task and isinstance(latest_failed_task.checkpoint, dict):
+            maybe_variants = latest_failed_task.checkpoint.get("generated_variants")
+            if isinstance(maybe_variants, list):
+                resume_variants = [item for item in maybe_variants if isinstance(item, dict)]
+                resumed_variant_count = len(resume_variants)
+
+        chapter.real_summary = None
+        chapter.selected_version_id = None
+        chapter.status = ChapterGenerationStatus.GENERATING.value
+        flow_config: Dict[str, Any] = {"preset": "basic"}
+        requested_versions = await _resolve_version_count(session)
+        flow_config["versions"] = requested_versions
+        task = await task_service.create_task(
+            task_type=TASK_TYPE_CHAPTER_GENERATION,
+            project_id=project_id,
+            user_id=current_user.id,
+            chapter_number=chapter_number,
+            retry_count=(latest_failed_task.retry_count + 1) if latest_failed_task else 1,
+            resume_from_task_id=latest_failed_task.id if latest_failed_task else None,
+            payload={
+                "writing_notes": payload.writing_notes,
+                "flow_config": flow_config,
+                "resume_variants": resume_variants,
+                "trace_context": _build_trace_context(
+                    request=request,
+                    action="writer_retry",
+                    user_id=int(current_user.id),
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                ),
+            },
+        )
+        generation_task_runner.enqueue(task.id)
+        await session.commit()
 
     message = (
         f"继续任务已提交（已复用 {resumed_variant_count} 个已生成版本）"
         if resumed_variant_count > 0
         else "重试任务已提交"
+    )
+    logger.info(
+        "章节重试任务已加入队列: project=%s chapter=%s user=%s task_id=%s request_id=%s resumed_variants=%s",
+        project_id,
+        chapter_number,
+        current_user.id,
+        task.id,
+        request_id,
+        resumed_variant_count,
     )
     return WriterTaskCenterRetryResponse(
         accepted=True,
@@ -906,73 +976,94 @@ async def retry_writer_task(
 @router.post("/novels/{project_id}/chapters/generate", response_model=NovelProjectSchema)
 async def generate_chapter(
     project_id: str,
-    request: GenerateChapterRequest,
+    payload: GenerateChapterRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user: UserInDB = Depends(get_current_user),
 ) -> NovelProjectSchema:
     novel_service = NovelService(session)
     task_service = GenerationTaskService(session)
     await novel_service.ensure_project_owner(project_id, current_user.id)
+    request_id = _request_id_from_request(request)
+    chapter_number = payload.chapter_number
+    submit_lock = _chapter_submit_lock(project_id, chapter_number)
 
-    outline = await novel_service.get_outline(project_id, request.chapter_number)
-    if not outline:
-        raise HTTPException(status_code=404, detail="蓝图中未找到对应章节纲要")
+    async with submit_lock:
+        outline = await novel_service.get_outline(project_id, chapter_number)
+        if not outline:
+            raise HTTPException(status_code=404, detail="蓝图中未找到对应章节纲要")
 
-    existing_active = await task_service.get_active_task(
-        project_id=project_id,
-        task_type=TASK_TYPE_CHAPTER_GENERATION,
-        chapter_number=request.chapter_number,
-    )
-    if existing_active:
-        return await _load_project_schema(novel_service, project_id, current_user.id)
+        existing_active = await task_service.get_active_task(
+            project_id=project_id,
+            task_type=TASK_TYPE_CHAPTER_GENERATION,
+            chapter_number=chapter_number,
+        )
+        if existing_active:
+            logger.info(
+                "忽略重复章节生成提交: project=%s chapter=%s user=%s active_task=%s request_id=%s",
+                project_id,
+                chapter_number,
+                current_user.id,
+                existing_active.id,
+                request_id,
+            )
+            return await _load_project_schema(novel_service, project_id, current_user.id)
 
-    chapter = await novel_service.get_or_create_chapter(project_id, request.chapter_number)
-    if chapter.status == ChapterGenerationStatus.GENERATING.value:
-        chapter.status = ChapterGenerationStatus.FAILED.value
+        chapter = await novel_service.get_or_create_chapter(project_id, chapter_number)
+        if chapter.status == ChapterGenerationStatus.GENERATING.value:
+            chapter.status = ChapterGenerationStatus.FAILED.value
 
-    latest_failed_task = await task_service.get_latest_task(
-        project_id=project_id,
-        task_type=TASK_TYPE_CHAPTER_GENERATION,
-        chapter_number=request.chapter_number,
-        statuses={TASK_STATUS_FAILED, TASK_STATUS_CANCELED},
-    )
-    resume_variants: list[dict] = []
-    if latest_failed_task and isinstance(latest_failed_task.checkpoint, dict):
-        maybe_variants = latest_failed_task.checkpoint.get("generated_variants")
-        if isinstance(maybe_variants, list):
-            resume_variants = [item for item in maybe_variants if isinstance(item, dict)]
+        latest_failed_task = await task_service.get_latest_task(
+            project_id=project_id,
+            task_type=TASK_TYPE_CHAPTER_GENERATION,
+            chapter_number=chapter_number,
+            statuses={TASK_STATUS_FAILED, TASK_STATUS_CANCELED},
+        )
+        resume_variants: list[dict] = []
+        if latest_failed_task and isinstance(latest_failed_task.checkpoint, dict):
+            maybe_variants = latest_failed_task.checkpoint.get("generated_variants")
+            if isinstance(maybe_variants, list):
+                resume_variants = [item for item in maybe_variants if isinstance(item, dict)]
 
-    version_count = await _resolve_version_count(session)
-    flow_config: Dict[str, Any] = {
-        "preset": "basic",
-        "versions": version_count,
-    }
+        version_count = await _resolve_version_count(session)
+        flow_config: Dict[str, Any] = {
+            "preset": "basic",
+            "versions": version_count,
+        }
 
-    chapter.real_summary = None
-    chapter.selected_version_id = None
-    chapter.status = ChapterGenerationStatus.GENERATING.value
-    task = await task_service.create_task(
-        task_type=TASK_TYPE_CHAPTER_GENERATION,
-        project_id=project_id,
-        chapter_number=request.chapter_number,
-        user_id=current_user.id,
-        retry_count=(latest_failed_task.retry_count + 1) if latest_failed_task else 0,
-        resume_from_task_id=latest_failed_task.id if latest_failed_task else None,
-        payload={
-            "writing_notes": request.writing_notes,
-            "flow_config": flow_config,
-            "resume_variants": resume_variants,
-        },
-    )
-    generation_task_runner.enqueue(task.id)
-    await session.commit()
+        chapter.real_summary = None
+        chapter.selected_version_id = None
+        chapter.status = ChapterGenerationStatus.GENERATING.value
+        task = await task_service.create_task(
+            task_type=TASK_TYPE_CHAPTER_GENERATION,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            user_id=current_user.id,
+            retry_count=(latest_failed_task.retry_count + 1) if latest_failed_task else 0,
+            resume_from_task_id=latest_failed_task.id if latest_failed_task else None,
+            payload={
+                "writing_notes": payload.writing_notes,
+                "flow_config": flow_config,
+                "resume_variants": resume_variants,
+                "trace_context": _build_trace_context(
+                    request=request,
+                    action="writer_generate",
+                    user_id=int(current_user.id),
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                ),
+            },
+        )
+        generation_task_runner.enqueue(task.id)
+        await session.commit()
 
     logger.info(
-        "章节任务已加入队列: project=%s chapter=%s user=%s task_id=%s resume_variants=%s",
+        "章节任务已加入队列: project=%s chapter=%s user=%s task_id=%s request_id=%s resume_variants=%s",
         project_id,
-        request.chapter_number,
+        chapter_number,
         current_user.id,
         task.id,
+        request_id,
         len(resume_variants),
     )
     return await _load_project_schema(novel_service, project_id, current_user.id)

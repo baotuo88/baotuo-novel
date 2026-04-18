@@ -157,6 +157,12 @@ class WriterTaskQueueSummary(BaseModel):
     canceled_count: int
     stale_running_count: int
     avg_running_age_minutes: float
+    recent_window_hours: int
+    recent_finished_count: int
+    recent_failed_count: int
+    recent_failure_rate_percent: float
+    recent_avg_duration_seconds: float
+    recent_p95_duration_seconds: float
 
 
 class WriterTaskFailureTopItem(BaseModel):

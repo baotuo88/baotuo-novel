@@ -266,6 +266,7 @@ export interface WriterTaskCenterItem {
   updated_at: string
   age_minutes: number
   error_message?: string | null
+  failure_category?: string | null
 }
 
 export interface WriterTaskCenterResponse {

@@ -22,6 +22,7 @@ from .generation_task_service import (
 )
 from .novel_service import NovelService
 from .pipeline_orchestrator import PipelineOrchestrator
+from ..utils.task_failure import classify_task_failure, failure_category_label
 
 logger = logging.getLogger(__name__)
 
@@ -430,6 +431,8 @@ class GenerationTaskRunner:
             user_id = task.user_id
             payload = task.payload if isinstance(task.payload, dict) else {}
             timeout_seconds = self._task_timeout_seconds(task_type)
+            trace_context = payload.get("trace_context") if isinstance(payload.get("trace_context"), dict) else {}
+            request_id = str(trace_context.get("request_id") or "").strip()
 
         heartbeat_handle = asyncio.create_task(
             self._heartbeat_loop(task_id),
@@ -449,6 +452,15 @@ class GenerationTaskRunner:
                     ),
                     timeout=timeout_seconds,
                 )
+                logger.info(
+                    "任务执行完成: task_id=%s type=%s project=%s chapter=%s user=%s request_id=%s",
+                    task_id,
+                    task_type,
+                    project_id,
+                    chapter_number,
+                    user_id,
+                    request_id or "-",
+                )
                 return
 
             if task_type == TASK_TYPE_BLUEPRINT_GENERATION:
@@ -459,6 +471,14 @@ class GenerationTaskRunner:
                         user_id=user_id,
                     ),
                     timeout=timeout_seconds,
+                )
+                logger.info(
+                    "任务执行完成: task_id=%s type=%s project=%s user=%s request_id=%s",
+                    task_id,
+                    task_type,
+                    project_id,
+                    user_id,
+                    request_id or "-",
                 )
                 return
 
@@ -476,12 +496,22 @@ class GenerationTaskRunner:
                 task_id,
                 error_message=f"任务执行超时（>{timeout_seconds}s）",
                 stage_label="执行超时",
+                task_type=task_type,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                user_id=user_id,
+                request_id=request_id,
             )
         except Exception as exc:  # noqa: BLE001
             await self._handle_task_failure(
                 task_id,
                 error_message=str(exc),
                 stage_label="执行失败",
+                task_type=task_type,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                user_id=user_id,
+                request_id=request_id,
             )
         finally:
             heartbeat_handle.cancel()
@@ -584,7 +614,18 @@ class GenerationTaskRunner:
         *,
         error_message: str,
         stage_label: str = "执行失败",
+        task_type: Optional[str] = None,
+        project_id: Optional[str] = None,
+        chapter_number: Optional[int] = None,
+        user_id: Optional[int] = None,
+        request_id: Optional[str] = None,
     ) -> None:
+        failure_category = classify_task_failure(
+            error_message,
+            status_message=stage_label,
+        )
+        failure_label = failure_category_label(failure_category)
+
         retry_plan = await self._prepare_auto_retry(task_id)
         if retry_plan:
             retry_task_id, backoff_seconds, retry_attempt, retry_max = retry_plan
@@ -593,18 +634,25 @@ class GenerationTaskRunner:
                 (error_message or "任务执行失败"),
                 stage_label=stage_label,
                 status_message=(
-                    f"任务失败，已自动安排重试（第{retry_attempt}/{retry_max}次），"
+                    f"{failure_label}，已自动安排重试（第{retry_attempt}/{retry_max}次），"
                     f"约 {backoff_seconds}s 后重试"
                 ),
             )
             self._schedule_delayed_enqueue(retry_task_id, backoff_seconds)
             logger.warning(
-                "任务失败自动重试已安排: source_task=%s retry_task=%s attempt=%s/%s backoff=%ss",
+                "任务失败自动重试已安排: source_task=%s retry_task=%s type=%s project=%s chapter=%s user=%s request_id=%s category=%s attempt=%s/%s backoff=%ss error=%s",
                 task_id,
                 retry_task_id,
+                task_type or "-",
+                project_id or "-",
+                chapter_number,
+                user_id,
+                request_id or "-",
+                failure_category,
                 retry_attempt,
                 retry_max,
                 backoff_seconds,
+                (error_message or "")[:220],
             )
             return
 
@@ -612,7 +660,18 @@ class GenerationTaskRunner:
             task_id,
             (error_message or "任务执行失败"),
             stage_label=stage_label,
-            status_message="任务执行失败，可重试",
+            status_message=f"{failure_label}，任务执行失败，可重试",
+        )
+        logger.warning(
+            "任务执行失败: task_id=%s type=%s project=%s chapter=%s user=%s request_id=%s category=%s error=%s",
+            task_id,
+            task_type or "-",
+            project_id or "-",
+            chapter_number,
+            user_id,
+            request_id or "-",
+            failure_category,
+            (error_message or "")[:240],
         )
 
     async def _run_chapter_task(

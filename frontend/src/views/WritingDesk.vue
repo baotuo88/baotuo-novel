@@ -302,9 +302,22 @@ const compactTaskMessage = (text: string, maxLength = TASK_STREAM_FAILURE_MESSAG
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized
 }
 
+const taskFailureCategoryLabel = (category?: string | null) => {
+  if (category === 'timeout') return '超时'
+  if (category === 'auth') return '鉴权失败'
+  if (category === 'rate_limit') return '限流/额度'
+  if (category === 'network') return '网络异常'
+  if (category === 'upstream') return '上游异常'
+  if (category === 'config') return '配置错误'
+  if (category === 'canceled') return '已取消'
+  return ''
+}
+
 const resolveTaskFailureMessage = (item: WriterTaskCenterItem) => {
   const raw = item.error_message || item.status_message || item.stage_label || '任务失败，请重试'
-  return compactTaskMessage(raw)
+  const categoryLabel = taskFailureCategoryLabel(item.failure_category)
+  const merged = categoryLabel ? `${categoryLabel}：${raw}` : raw
+  return compactTaskMessage(merged)
 }
 
 const isCurrentVersion = (versionIndex: number) => {

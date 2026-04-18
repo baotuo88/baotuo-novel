@@ -3,11 +3,13 @@ import asyncio
 import logging
 import csv
 import io
+import math
 import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Literal, Optional
+from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -114,6 +116,12 @@ _WRITER_TASK_HEARTBEAT_TIMEOUT_SECONDS = _parse_env_int(
     default=300,
     min_value=30,
     max_value=3600,
+)
+_WRITER_TASK_RECENT_WINDOW_HOURS = _parse_env_int(
+    "WRITER_TASK_METRIC_WINDOW_HOURS",
+    default=24,
+    min_value=1,
+    max_value=24 * 7,
 )
 
 
@@ -283,13 +291,22 @@ async def _run_writer_retry_task(
             if action == "generate":
                 from .writer import generate_chapter as writer_generate_chapter
 
+                admin_request = Request(
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": f"/api/admin/writer-task-queue/retry/{chapter_id}",
+                        "headers": [],
+                    }
+                )
+                admin_request.state.request_id = f"admin-retry-{uuid4().hex[:12]}"
                 await writer_generate_chapter(
                     project_id=project_id,
-                    request=GenerateChapterRequest(
+                    payload=GenerateChapterRequest(
                         chapter_number=chapter_number,
                         writing_notes=(writing_notes or None),
                     ),
-                    background_tasks=BackgroundTasks(),
+                    request=admin_request,
                     session=task_session,
                     current_user=owner_user,
                 )
@@ -952,6 +969,17 @@ async def get_writer_task_queue(
         value = dt if getattr(dt, "tzinfo", None) is not None else dt.replace(tzinfo=timezone.utc)
         return max(0, int((now_utc - value).total_seconds()))
 
+    def _duration_seconds(start: Optional[datetime], end: Optional[datetime]) -> Optional[float]:
+        if not start or not end:
+            return None
+        start_dt = start if getattr(start, "tzinfo", None) is not None else start.replace(tzinfo=timezone.utc)
+        end_dt = end if getattr(end, "tzinfo", None) is not None else end.replace(tzinfo=timezone.utc)
+        seconds = (end_dt - start_dt).total_seconds()
+        if seconds < 0:
+            return None
+        # 防止脏数据拉高统计
+        return min(seconds, 7 * 24 * 3600)
+
     base_filters = [GenerationTask.task_type.in_(task_types)]
     if project_id:
         base_filters.append(GenerationTask.project_id == project_id)
@@ -990,6 +1018,46 @@ async def get_writer_task_queue(
         if running_age_minutes_values
         else 0.0
     )
+
+    recent_window_since = now_utc - timedelta(hours=_WRITER_TASK_RECENT_WINDOW_HOURS)
+    recent_rows = (
+        await session.execute(
+            select(
+                GenerationTask.status,
+                GenerationTask.started_at,
+                GenerationTask.finished_at,
+                GenerationTask.created_at,
+            ).where(
+                *base_filters,
+                GenerationTask.finished_at.is_not(None),
+                GenerationTask.finished_at >= recent_window_since,
+            )
+        )
+    ).all()
+    recent_finished_count = len(recent_rows)
+    recent_failed_count = sum(1 for status, _, _, _ in recent_rows if str(status or "") in failed_statuses)
+    recent_failure_rate_percent = (
+        round((recent_failed_count * 100.0) / recent_finished_count, 2)
+        if recent_finished_count > 0
+        else 0.0
+    )
+    recent_durations = [
+        value
+        for _, started_at, finished_at, created_at in recent_rows
+        for value in [_duration_seconds(started_at or created_at, finished_at)]
+        if value is not None
+    ]
+    recent_avg_duration_seconds = (
+        round(sum(recent_durations) / len(recent_durations), 2)
+        if recent_durations
+        else 0.0
+    )
+    if recent_durations:
+        sorted_durations = sorted(recent_durations)
+        p95_index = max(0, min(len(sorted_durations) - 1, math.ceil(len(sorted_durations) * 0.95) - 1))
+        recent_p95_duration_seconds = round(sorted_durations[p95_index], 2)
+    else:
+        recent_p95_duration_seconds = 0.0
 
     failure_rows = (
         await session.execute(
@@ -1117,6 +1185,12 @@ async def get_writer_task_queue(
         canceled_count=int(status_counts_all.get(TASK_STATUS_CANCELED, 0)),
         stale_running_count=stale_running_count,
         avg_running_age_minutes=avg_running_age_minutes,
+        recent_window_hours=_WRITER_TASK_RECENT_WINDOW_HOURS,
+        recent_finished_count=recent_finished_count,
+        recent_failed_count=recent_failed_count,
+        recent_failure_rate_percent=recent_failure_rate_percent,
+        recent_avg_duration_seconds=recent_avg_duration_seconds,
+        recent_p95_duration_seconds=recent_p95_duration_seconds,
     )
     return WriterTaskQueueResponse(
         total=len(items),

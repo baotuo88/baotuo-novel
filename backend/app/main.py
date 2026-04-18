@@ -4,8 +4,9 @@
 import logging
 from logging.config import dictConfig
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import settings
@@ -97,6 +98,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def attach_request_id(request: Request, call_next):
+    inbound_request_id = str(request.headers.get("X-Request-ID") or "").strip()
+    request_id = inbound_request_id[:80] if inbound_request_id else uuid4().hex
+    request.state.request_id = request_id
+
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 app.include_router(api_router)
 

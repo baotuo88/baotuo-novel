@@ -148,6 +148,22 @@
                   <n-tag size="small" type="default" bordered>
                     心跳阈值 {{ heartbeatTimeoutMinutes }} 分钟
                   </n-tag>
+                  <n-tag size="small" type="default" bordered>
+                    {{ taskQueue?.summary?.recent_window_hours ?? 24 }}h 完成 {{ taskQueue?.summary?.recent_finished_count ?? 0 }}
+                  </n-tag>
+                  <n-tag
+                    size="small"
+                    bordered
+                    :type="queueFailureRateType(taskQueue?.summary?.recent_failure_rate_percent)"
+                  >
+                    失败率 {{ Number(taskQueue?.summary?.recent_failure_rate_percent ?? 0).toFixed(2) }}%
+                  </n-tag>
+                  <n-tag size="small" type="default" bordered>
+                    平均耗时 {{ formatDurationSeconds(taskQueue?.summary?.recent_avg_duration_seconds) }}
+                  </n-tag>
+                  <n-tag size="small" type="default" bordered>
+                    P95 {{ formatDurationSeconds(taskQueue?.summary?.recent_p95_duration_seconds) }}
+                  </n-tag>
                 </div>
               </n-space>
             </n-card>
@@ -511,6 +527,23 @@ const formatHeartbeatAge = (seconds?: number | null) => {
   if (!Number.isFinite(total)) return '--'
   if (total < 60) return `${Math.floor(total)}s`
   return `${Math.floor(total / 60)}m`
+}
+
+const formatDurationSeconds = (seconds?: number | null) => {
+  if (seconds == null) return '--'
+  const total = Math.max(0, Number(seconds))
+  if (!Number.isFinite(total)) return '--'
+  if (total < 60) return `${total.toFixed(1)}s`
+  if (total < 3600) return `${(total / 60).toFixed(1)}m`
+  return `${(total / 3600).toFixed(2)}h`
+}
+
+const queueFailureRateType = (failureRate?: number | null): 'success' | 'warning' | 'error' | 'default' => {
+  const value = Number(failureRate || 0)
+  if (!Number.isFinite(value)) return 'default'
+  if (value >= 20) return 'error'
+  if (value >= 8) return 'warning'
+  return 'success'
 }
 
 const normalizedStaleThreshold = computed(() => {

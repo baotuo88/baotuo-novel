@@ -79,7 +79,7 @@
               <div class="md-body-small md-on-surface-variant mt-1">状态：{{ item.status }} · {{ item.word_count }} 字 · {{ item.age_minutes }} 分钟前更新</div>
 
               <div v-if="item.error_message" class="task-error mt-2">
-                {{ item.error_message }}
+                {{ formatFailureMessage(item) }}
               </div>
 
               <div class="task-actions mt-3">
@@ -150,6 +150,24 @@ const queueStateLabel = (state: string) => {
   if (state === 'failed') return '失败'
   if (state === 'done') return '已完成'
   return '其他'
+}
+
+const failureCategoryLabel = (category?: string | null) => {
+  if (category === 'timeout') return '超时'
+  if (category === 'auth') return '鉴权失败'
+  if (category === 'rate_limit') return '限流/额度'
+  if (category === 'network') return '网络异常'
+  if (category === 'upstream') return '上游异常'
+  if (category === 'config') return '配置错误'
+  if (category === 'canceled') return '已取消'
+  return ''
+}
+
+const formatFailureMessage = (item: WriterTaskCenterItem) => {
+  const message = String(item.error_message || '').trim()
+  if (!message) return ''
+  const label = failureCategoryLabel(item.failure_category)
+  return label ? `${label}：${message}` : message
 }
 
 const authStore = useAuthStore()

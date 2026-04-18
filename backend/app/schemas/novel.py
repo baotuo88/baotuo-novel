@@ -257,6 +257,7 @@ class WriterTaskCenterItem(BaseModel):
     updated_at: datetime
     age_minutes: int = 0
     error_message: Optional[str] = None
+    failure_category: Optional[str] = None
 
 
 class WriterTaskCenterResponse(BaseModel):

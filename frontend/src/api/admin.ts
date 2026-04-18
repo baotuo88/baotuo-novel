@@ -153,6 +153,12 @@ export interface WriterTaskQueueSummary {
   canceled_count: number
   stale_running_count: number
   avg_running_age_minutes: number
+  recent_window_hours: number
+  recent_finished_count: number
+  recent_failed_count: number
+  recent_failure_rate_percent: number
+  recent_avg_duration_seconds: number
+  recent_p95_duration_seconds: number
 }
 
 export interface WriterTaskFailureTopItem {
