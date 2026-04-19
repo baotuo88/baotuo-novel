@@ -28,6 +28,49 @@ class GenerationTaskService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    @staticmethod
+    def _normalize_checkpoint(raw: Any) -> Dict[str, Any]:
+        if isinstance(raw, dict):
+            return dict(raw)
+        return {}
+
+    @staticmethod
+    def _touch_stage_timeline(
+        checkpoint: Dict[str, Any],
+        *,
+        stage_label: Optional[str],
+        progress_percent: Optional[int],
+        now: datetime,
+    ) -> None:
+        if stage_label is None:
+            return
+        stage = str(stage_label).strip()
+        if not stage:
+            return
+
+        timeline_raw = checkpoint.get("stage_timeline")
+        timeline: list[Dict[str, Any]] = [
+            item for item in timeline_raw
+            if isinstance(item, dict) and str(item.get("stage") or "").strip()
+        ] if isinstance(timeline_raw, list) else []
+
+        entered_at = now.isoformat()
+        progress_value = None if progress_percent is None else max(0, min(100, int(progress_percent)))
+        if timeline and str(timeline[-1].get("stage") or "").strip() == stage:
+            timeline[-1]["updated_at"] = entered_at
+            if progress_value is not None:
+                timeline[-1]["progress_percent"] = progress_value
+        else:
+            timeline.append(
+                {
+                    "stage": stage,
+                    "entered_at": entered_at,
+                    "updated_at": entered_at,
+                    "progress_percent": progress_value,
+                }
+            )
+        checkpoint["stage_timeline"] = timeline[-80:]
+
     async def create_task(
         self,
         *,
@@ -231,6 +274,7 @@ class GenerationTaskService:
         task = await self.get_task(task_id)
         if not task:
             return None
+        now = datetime.now(timezone.utc)
 
         if progress_percent is not None:
             task.progress_percent = max(0, min(100, int(progress_percent)))
@@ -238,11 +282,20 @@ class GenerationTaskService:
             task.stage_label = stage_label
         if status_message is not None:
             task.status_message = status_message
-        if checkpoint is not None:
-            current = task.checkpoint if isinstance(task.checkpoint, dict) else {}
-            current.update(checkpoint)
+        if checkpoint is not None or stage_label is not None:
+            current = self._normalize_checkpoint(task.checkpoint)
+            if checkpoint is not None:
+                current.update(checkpoint)
+            self._touch_stage_timeline(
+                current,
+                stage_label=stage_label,
+                progress_percent=progress_percent if progress_percent is not None else task.progress_percent,
+                now=now,
+            )
+            current["last_progress_at"] = now.isoformat()
+            current["last_progress_percent"] = int(task.progress_percent or 0)
             task.checkpoint = current
-        task.heartbeat_at = datetime.now(timezone.utc)
+        task.heartbeat_at = now
         await self.session.commit()
         return task
 

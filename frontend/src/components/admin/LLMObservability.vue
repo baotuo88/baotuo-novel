@@ -515,6 +515,16 @@ const queueStateLabel = (state: string) => {
   return '其他'
 }
 
+const consistencyGuardLabel = (status?: string | null) => {
+  if (status === 'passed') return '通过'
+  if (status === 'fixed') return '已修复'
+  if (status === 'review_required') return '需人工确认'
+  if (status === 'disabled') return '已关闭'
+  if (status === 'skipped') return '已跳过'
+  if (status === 'error') return '异常'
+  return '--'
+}
+
 const taskTypeLabel = (taskType: string) => {
   if (taskType === 'chapter_generation') return '章节生成'
   if (taskType === 'blueprint_generation') return '蓝图生成'
@@ -1056,9 +1066,50 @@ const queueColumns: DataTableColumns<WriterTaskQueueItem> = [
           : formatHeartbeatAge(row.heartbeat_age_seconds)
   },
   {
-    title: '运行(分钟)',
+    title: '运行时长',
     key: 'age_minutes',
-    width: 100
+    width: 110,
+    render: (row) => formatDurationSeconds(row.run_seconds)
+  },
+  {
+    title: '当前阶段耗时',
+    key: 'current_stage_seconds',
+    width: 120,
+    render: (row) => formatDurationSeconds(row.current_stage_seconds)
+  },
+  {
+    title: 'LLM',
+    key: 'llm_metrics',
+    width: 170,
+    render: (row) => {
+      const total = Number(row.llm_call_count || 0)
+      const success = Number(row.llm_success_count || 0)
+      const err = Number(row.llm_error_count || 0)
+      if (!total) return '--'
+      const model = row.llm_top_model ? String(row.llm_top_model) : ''
+      return `${success}/${total} 成功 · 失败${err}${model ? ` · ${model}` : ''}`
+    }
+  },
+  {
+    title: '一致性守护',
+    key: 'consistency_guard_status',
+    width: 156,
+    render: (row) =>
+      row.consistency_guard_status
+        ? h(
+            NTag,
+            {
+              size: 'small',
+              bordered: false,
+              type: row.consistency_guard_status === 'fixed'
+                ? 'success'
+                : row.consistency_guard_status === 'review_required' || row.consistency_guard_status === 'error'
+                  ? 'warning'
+                  : 'default'
+            },
+            { default: () => consistencyGuardLabel(row.consistency_guard_status) }
+          )
+        : '--'
   },
   {
     title: '更新时间',

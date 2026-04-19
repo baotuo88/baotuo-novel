@@ -3,7 +3,7 @@
     <div class="flex flex-col gap-1">
       <h3 class="md-title-medium" style="color: var(--md-on-surface);">发布中心</h3>
       <p class="md-body-small" style="color: var(--md-on-surface-variant);">
-        一键导出整本小说，支持 Markdown / TXT / DOCX / EPUB。
+        导出单格式或批量打包（ZIP），支持目录模板与回调通知。
       </p>
     </div>
 
@@ -31,9 +31,9 @@
       </div>
     </div>
 
-    <div class="md-card md-card-outlined p-4 md:p-5 space-y-4" style="border-radius: var(--md-radius-md);">
+    <div class="md-card md-card-outlined p-4 md:p-5 space-y-5" style="border-radius: var(--md-radius-md);">
       <div>
-        <div class="md-label-large mb-2">导出格式</div>
+        <div class="md-label-large mb-2">单格式导出</div>
         <div class="flex flex-wrap gap-2">
           <button
             v-for="item in formatOptions"
@@ -44,6 +44,25 @@
           >
             {{ item.label }}
           </button>
+        </div>
+      </div>
+
+      <div>
+        <div class="md-label-large mb-2">批量导出（ZIP）</div>
+        <div class="flex flex-wrap gap-2">
+          <label
+            v-for="item in formatOptions"
+            :key="`batch-${item.value}`"
+            class="batch-chip"
+            :class="{ active: batchFormats.includes(item.value) }"
+          >
+            <input
+              type="checkbox"
+              :checked="batchFormats.includes(item.value)"
+              @change="toggleBatchFormat(item.value)"
+            />
+            <span>{{ item.label }}</span>
+          </label>
         </div>
       </div>
 
@@ -59,22 +78,30 @@
             <span>指定范围</span>
           </label>
           <div v-if="scope === 'range'" class="range-inputs">
-            <input
-              v-model.number="startChapter"
-              type="number"
-              min="1"
-              class="range-input"
-              placeholder="开始章"
-            />
+            <input v-model.number="startChapter" type="number" min="1" class="range-input" placeholder="开始章" />
             <span>至</span>
-            <input
-              v-model.number="endChapter"
-              type="number"
-              min="1"
-              class="range-input"
-              placeholder="结束章"
-            />
+            <input v-model.number="endChapter" type="number" min="1" class="range-input" placeholder="结束章" />
           </div>
+        </div>
+      </div>
+
+      <div class="grid gap-3 md:grid-cols-2">
+        <div>
+          <div class="md-label-large mb-2">目录样式</div>
+          <select v-model="tocStyle" class="field-select">
+            <option value="compact">简洁目录</option>
+            <option value="detailed">详细目录</option>
+            <option value="none">不生成目录</option>
+          </select>
+        </div>
+        <div>
+          <div class="md-label-large mb-2">导出回调（可选）</div>
+          <input
+            v-model.trim="webhookUrl"
+            type="text"
+            class="field-input"
+            placeholder="https://example.com/webhook"
+          />
         </div>
       </div>
 
@@ -91,13 +118,20 @@
 
       <p v-if="errorMessage" class="md-body-small text-red-500">{{ errorMessage }}</p>
 
-      <div class="flex justify-end">
+      <div class="flex flex-wrap justify-end gap-3">
+        <button
+          class="md-btn md-btn-outlined md-ripple"
+          :disabled="batchExporting || exporting || !canBatchExport || !canExport"
+          @click="downloadBatchExport"
+        >
+          {{ batchExporting ? '打包中...' : '批量导出 ZIP' }}
+        </button>
         <button
           class="md-btn md-btn-filled md-ripple"
-          :disabled="exporting || !canExport"
+          :disabled="exporting || batchExporting || !canExport"
           @click="downloadExport"
         >
-          {{ exporting ? '导出中...' : '下载导出文件' }}
+          {{ exporting ? '导出中...' : '单格式导出' }}
         </button>
       </div>
     </div>
@@ -106,7 +140,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NovelAPI, type PublishFormat, type PublishSummaryResponse } from '@/api/novel'
+import { NovelAPI, type PublishFormat, type PublishSummaryResponse, type PublishTocStyle } from '@/api/novel'
 
 const props = defineProps<{
   projectId: string
@@ -121,12 +155,16 @@ const formatOptions: Array<{ label: string; value: PublishFormat }> = [
 ]
 
 const selectedFormat = ref<PublishFormat>('markdown')
+const batchFormats = ref<PublishFormat[]>(['markdown', 'txt'])
 const scope = ref<'all' | 'range'>('all')
 const startChapter = ref<number | null>(null)
 const endChapter = ref<number | null>(null)
 const includeOutline = ref(true)
 const includeMetadata = ref(true)
+const tocStyle = ref<PublishTocStyle>('compact')
+const webhookUrl = ref('')
 const exporting = ref(false)
+const batchExporting = ref(false)
 const errorMessage = ref('')
 
 watch(
@@ -145,6 +183,25 @@ const canExport = computed(() => {
   return startChapter.value > 0 && endChapter.value >= startChapter.value
 })
 
+const canBatchExport = computed(() => batchFormats.value.length > 0)
+
+const toggleBatchFormat = (format: PublishFormat) => {
+  if (batchFormats.value.includes(format)) {
+    batchFormats.value = batchFormats.value.filter((item) => item !== format)
+    return
+  }
+  batchFormats.value = [...batchFormats.value, format]
+}
+
+const buildQuery = () => ({
+  start_chapter: scope.value === 'range' ? startChapter.value || undefined : undefined,
+  end_chapter: scope.value === 'range' ? endChapter.value || undefined : undefined,
+  include_outline: includeOutline.value,
+  include_metadata: includeMetadata.value,
+  toc_style: tocStyle.value,
+  webhook_url: webhookUrl.value || undefined
+})
+
 const downloadExport = async () => {
   errorMessage.value = ''
   if (!canExport.value) {
@@ -155,15 +212,35 @@ const downloadExport = async () => {
   try {
     await NovelAPI.downloadPublishExport(props.projectId, {
       format: selectedFormat.value,
-      start_chapter: scope.value === 'range' ? startChapter.value || undefined : undefined,
-      end_chapter: scope.value === 'range' ? endChapter.value || undefined : undefined,
-      include_outline: includeOutline.value,
-      include_metadata: includeMetadata.value
+      ...buildQuery()
     })
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '导出失败，请稍后重试'
   } finally {
     exporting.value = false
+  }
+}
+
+const downloadBatchExport = async () => {
+  errorMessage.value = ''
+  if (!canExport.value) {
+    errorMessage.value = '指定范围无效，请检查开始章和结束章'
+    return
+  }
+  if (!canBatchExport.value) {
+    errorMessage.value = '请至少选择一个导出格式'
+    return
+  }
+  batchExporting.value = true
+  try {
+    await NovelAPI.downloadPublishBatchExport(props.projectId, {
+      formats: batchFormats.value,
+      ...buildQuery()
+    })
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '批量导出失败，请稍后重试'
+  } finally {
+    batchExporting.value = false
   }
 }
 </script>
@@ -173,7 +250,8 @@ const downloadExport = async () => {
   color: var(--md-on-surface-variant);
 }
 
-.format-chip {
+.format-chip,
+.batch-chip {
   border: 1px solid var(--md-outline-variant);
   background: color-mix(in srgb, var(--md-surface-container) 88%, white 12%);
   color: var(--md-on-surface);
@@ -181,9 +259,17 @@ const downloadExport = async () => {
   padding: 6px 14px;
   font-size: 13px;
   transition: all .2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.format-chip.active {
+.batch-chip input {
+  accent-color: var(--md-primary);
+}
+
+.format-chip.active,
+.batch-chip.active {
   border-color: color-mix(in srgb, var(--md-primary) 68%, transparent);
   background: color-mix(in srgb, var(--md-primary-container) 72%, white 28%);
   color: var(--md-on-primary-container);
@@ -204,14 +290,24 @@ const downloadExport = async () => {
   color: var(--md-on-surface-variant);
 }
 
-.range-input {
-  width: 88px;
+.range-input,
+.field-select,
+.field-input {
   height: 34px;
   border: 1px solid var(--md-outline-variant);
   border-radius: 8px;
   padding: 0 10px;
   background: color-mix(in srgb, var(--md-surface-container-low) 84%, white 16%);
   color: var(--md-on-surface);
+}
+
+.range-input {
+  width: 88px;
+}
+
+.field-select,
+.field-input {
+  width: 100%;
 }
 
 .toggle-item {

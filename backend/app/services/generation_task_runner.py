@@ -4,14 +4,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import select, update
 
 from ..core.config import settings
 from ..db.session import AsyncSessionLocal
-from ..models.novel import Chapter
+from ..models.llm_call_log import LLMCallLog
+from ..models.novel import Chapter, ChapterVersion
 from ..models.system_config import SystemConfig
+from .consistency_service import ConsistencyService
 from .blueprint_generation_service import generate_blueprint_for_project
 from .generation_task_service import (
     TASK_STATUS_CANCELED,
@@ -20,11 +24,21 @@ from .generation_task_service import (
     TASK_TYPE_CHAPTER_GENERATION,
     GenerationTaskService,
 )
+from .llm_service import LLMService
 from .novel_service import NovelService
 from .pipeline_orchestrator import PipelineOrchestrator
 from ..utils.task_failure import classify_task_failure, failure_category_label
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ConsistencyGuardPolicy:
+    enabled: bool
+    min_severity: str
+    auto_fix: bool
+    auto_select_fixed: bool
+    max_violations: int
 
 
 class GenerationTaskRunner:
@@ -100,6 +114,175 @@ class GenerationTaskRunner:
         self._lock = asyncio.Lock()
         self._policy_refresh_lock = asyncio.Lock()
         self._next_policy_refresh_at = 0.0
+
+    @staticmethod
+    def _parse_bool(raw: Any, default: bool) -> bool:
+        if raw is None:
+            return default
+        normalized = str(raw).strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    @staticmethod
+    def _normalize_severity(raw: Any, default: str = "major") -> str:
+        value = str(raw or "").strip().lower()
+        if value in {"critical", "major", "minor"}:
+            return value
+        return default
+
+    @staticmethod
+    def _severity_rank(level: str) -> int:
+        mapping = {"critical": 1, "major": 2, "minor": 3}
+        return mapping.get(str(level).strip().lower(), 3)
+
+    async def _resolve_consistency_guard_policy(self, session) -> ConsistencyGuardPolicy:
+        keys = {
+            "writer.consistency_guard.enabled": "true",
+            "writer.consistency_guard.min_severity": "major",
+            "writer.consistency_guard.auto_fix": "true",
+            "writer.consistency_guard.auto_select_fixed": "true",
+            "writer.consistency_guard.max_violations": "12",
+        }
+        rows = (
+            await session.execute(
+                select(SystemConfig.key, SystemConfig.value).where(SystemConfig.key.in_(list(keys.keys())))
+            )
+        ).all()
+        values = {str(key): value for key, value in rows}
+
+        raw_max_violations = values.get("writer.consistency_guard.max_violations", keys["writer.consistency_guard.max_violations"])
+        try:
+            max_violations = max(1, min(50, int(str(raw_max_violations).strip())))
+        except Exception:
+            max_violations = 12
+
+        return ConsistencyGuardPolicy(
+            enabled=self._parse_bool(values.get("writer.consistency_guard.enabled"), True),
+            min_severity=self._normalize_severity(
+                values.get("writer.consistency_guard.min_severity"),
+                default="major",
+            ),
+            auto_fix=self._parse_bool(values.get("writer.consistency_guard.auto_fix"), True),
+            auto_select_fixed=self._parse_bool(
+                values.get("writer.consistency_guard.auto_select_fixed"),
+                True,
+            ),
+            max_violations=max_violations,
+        )
+
+    def _filter_guard_violations(
+        self,
+        violations: list[Any],
+        *,
+        min_severity: str,
+        limit: int,
+    ) -> list[Any]:
+        threshold = self._severity_rank(min_severity)
+        selected: list[Any] = []
+        for item in violations:
+            severity_value = item.severity.value if hasattr(item.severity, "value") else str(item.severity)
+            if self._severity_rank(severity_value) <= threshold:
+                selected.append(item)
+            if len(selected) >= limit:
+                break
+        return selected
+
+    def _format_consistency_report(self, result: Any) -> Dict[str, Any]:
+        return {
+            "is_consistent": bool(result.is_consistent),
+            "summary": str(result.summary or "").strip(),
+            "check_time_ms": int(getattr(result, "check_time_ms", 0) or 0),
+            "violations": [
+                {
+                    "severity": item.severity.value if hasattr(item.severity, "value") else str(item.severity),
+                    "category": item.category,
+                    "description": item.description,
+                    "location": item.location,
+                    "suggested_fix": item.suggested_fix,
+                    "confidence": float(item.confidence or 0.0),
+                }
+                for item in (result.violations or [])
+            ],
+        }
+
+    async def _collect_task_llm_metrics(
+        self,
+        *,
+        project_id: str,
+        user_id: int,
+        started_at: Optional[datetime],
+        finished_at: datetime,
+    ) -> Dict[str, Any]:
+        if started_at is None:
+            return {
+                "call_count": 0,
+                "success_count": 0,
+                "error_count": 0,
+                "avg_latency_ms": None,
+                "top_model": None,
+                "top_provider": None,
+            }
+
+        start = started_at if getattr(started_at, "tzinfo", None) is not None else started_at.replace(tzinfo=timezone.utc)
+        end = finished_at if getattr(finished_at, "tzinfo", None) is not None else finished_at.replace(tzinfo=timezone.utc)
+        if end < start:
+            end = start
+
+        start_window = start.replace(microsecond=0)
+        end_window = end.replace(microsecond=0)
+        # 加 8 秒缓冲，覆盖少量日志写入延迟
+        end_window = end_window + timedelta(seconds=8)
+
+        async with AsyncSessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        LLMCallLog.status,
+                        LLMCallLog.model,
+                        LLMCallLog.provider,
+                        LLMCallLog.latency_ms,
+                    ).where(
+                        LLMCallLog.project_id == project_id,
+                        LLMCallLog.user_id == user_id,
+                        LLMCallLog.created_at >= start_window,
+                        LLMCallLog.created_at <= end_window,
+                    )
+                )
+            ).all()
+
+        total = len(rows)
+        success_count = sum(1 for status, _, _, _ in rows if str(status or "").strip().lower() == "success")
+        error_count = total - success_count
+        latency_values = [
+            int(latency_ms)
+            for status, _, _, latency_ms in rows
+            if str(status or "").strip().lower() == "success" and latency_ms is not None
+        ]
+        avg_latency_ms = round(sum(latency_values) / len(latency_values), 2) if latency_values else None
+
+        model_counter: Dict[str, int] = {}
+        provider_counter: Dict[str, int] = {}
+        for _, model, provider, _ in rows:
+            model_key = str(model or "").strip()
+            provider_key = str(provider or "").strip()
+            if model_key:
+                model_counter[model_key] = model_counter.get(model_key, 0) + 1
+            if provider_key:
+                provider_counter[provider_key] = provider_counter.get(provider_key, 0) + 1
+
+        top_model = max(model_counter.items(), key=lambda item: item[1])[0] if model_counter else None
+        top_provider = max(provider_counter.items(), key=lambda item: item[1])[0] if provider_counter else None
+        return {
+            "call_count": total,
+            "success_count": success_count,
+            "error_count": error_count,
+            "avg_latency_ms": avg_latency_ms,
+            "top_model": top_model,
+            "top_provider": top_provider,
+        }
 
     @staticmethod
     def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
@@ -433,16 +616,34 @@ class GenerationTaskRunner:
             timeout_seconds = self._task_timeout_seconds(task_type)
             trace_context = payload.get("trace_context") if isinstance(payload.get("trace_context"), dict) else {}
             request_id = str(trace_context.get("request_id") or "").strip()
+            started_at = task.started_at
+
+        await self._progress(
+            task_id,
+            max(1, int(getattr(task, "progress_percent", 1) or 1)),
+            "执行中",
+            "任务开始执行",
+            checkpoint={
+                "execution_meta": {
+                    "request_id": request_id or None,
+                    "task_type": task_type,
+                    "project_id": project_id,
+                    "chapter_number": chapter_number,
+                    "worker_started_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
 
         heartbeat_handle = asyncio.create_task(
             self._heartbeat_loop(task_id),
             name=f"generation-task-heartbeat-{task_id}",
         )
+        run_started_perf = time.perf_counter()
         try:
             if task_type == TASK_TYPE_CHAPTER_GENERATION:
                 if chapter_number is None:
                     raise ValueError("章节任务缺少 chapter_number")
-                await asyncio.wait_for(
+                chapter_result = await asyncio.wait_for(
                     self._run_chapter_task(
                         task_id=task_id,
                         project_id=project_id,
@@ -451,6 +652,40 @@ class GenerationTaskRunner:
                         payload=payload,
                     ),
                     timeout=timeout_seconds,
+                )
+                finished_at = datetime.now(timezone.utc)
+                try:
+                    llm_metrics = await self._collect_task_llm_metrics(
+                        project_id=project_id,
+                        user_id=user_id,
+                        started_at=started_at,
+                        finished_at=finished_at,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("统计章节任务 LLM 指标失败: task=%s error=%s", task_id, exc)
+                    llm_metrics = {
+                        "call_count": 0,
+                        "success_count": 0,
+                        "error_count": 0,
+                        "avg_latency_ms": None,
+                        "top_model": None,
+                        "top_provider": None,
+                    }
+                final_result = dict(chapter_result or {})
+                final_result["execution"] = {
+                    "task_type": task_type,
+                    "duration_seconds": round(max(0.0, time.perf_counter() - run_started_perf), 2),
+                    "timeout_seconds": timeout_seconds,
+                    "request_id": request_id or None,
+                    "started_at": started_at.isoformat() if started_at else None,
+                    "finished_at": finished_at.isoformat(),
+                }
+                final_result["llm_metrics"] = llm_metrics
+                await self._mark_task_completed(
+                    task_id,
+                    result=final_result,
+                    stage_label="生成完成",
+                    status_message=f"第{chapter_number}章生成完成",
                 )
                 logger.info(
                     "任务执行完成: task_id=%s type=%s project=%s chapter=%s user=%s request_id=%s",
@@ -464,13 +699,47 @@ class GenerationTaskRunner:
                 return
 
             if task_type == TASK_TYPE_BLUEPRINT_GENERATION:
-                await asyncio.wait_for(
+                blueprint_result = await asyncio.wait_for(
                     self._run_blueprint_task(
                         task_id=task_id,
                         project_id=project_id,
                         user_id=user_id,
                     ),
                     timeout=timeout_seconds,
+                )
+                finished_at = datetime.now(timezone.utc)
+                try:
+                    llm_metrics = await self._collect_task_llm_metrics(
+                        project_id=project_id,
+                        user_id=user_id,
+                        started_at=started_at,
+                        finished_at=finished_at,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("统计蓝图任务 LLM 指标失败: task=%s error=%s", task_id, exc)
+                    llm_metrics = {
+                        "call_count": 0,
+                        "success_count": 0,
+                        "error_count": 0,
+                        "avg_latency_ms": None,
+                        "top_model": None,
+                        "top_provider": None,
+                    }
+                final_result = dict(blueprint_result or {})
+                final_result["execution"] = {
+                    "task_type": task_type,
+                    "duration_seconds": round(max(0.0, time.perf_counter() - run_started_perf), 2),
+                    "timeout_seconds": timeout_seconds,
+                    "request_id": request_id or None,
+                    "started_at": started_at.isoformat() if started_at else None,
+                    "finished_at": finished_at.isoformat(),
+                }
+                final_result["llm_metrics"] = llm_metrics
+                await self._mark_task_completed(
+                    task_id,
+                    result=final_result,
+                    stage_label="蓝图完成",
+                    status_message="蓝图生成完成",
                 )
                 logger.info(
                     "任务执行完成: task_id=%s type=%s project=%s user=%s request_id=%s",
@@ -682,7 +951,7 @@ class GenerationTaskRunner:
         chapter_number: int,
         user_id: int,
         payload: Dict[str, Any],
-    ) -> None:
+    ) -> Dict[str, Any]:
         await self._progress(task_id, 6, "准备章节任务", "正在校验章节与配置")
         await self._raise_if_cancel_requested(task_id)
 
@@ -748,17 +1017,37 @@ class GenerationTaskRunner:
                 await session.commit()
                 raise
 
-        await self._mark_task_completed(
-            task_id,
-            result={
-                "project_id": project_id,
-                "chapter_number": chapter_number,
-                "best_version_index": result.get("best_version_index", 0),
-                "variant_count": len(result.get("variants") or []),
-            },
-            stage_label="生成完成",
-            status_message=f"第{chapter_number}章生成完成",
-        )
+            try:
+                guard_summary = await self._run_consistency_guard(
+                    task_id=task_id,
+                    session=session,
+                    chapter=chapter,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    user_id=user_id,
+                    generation_result=result,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "一致性守护执行失败，已降级跳过: project=%s chapter=%s task=%s error=%s",
+                    project_id,
+                    chapter_number,
+                    task_id,
+                    exc,
+                )
+                guard_summary = {
+                    "enabled": True,
+                    "status": "error",
+                    "message": "一致性守护执行失败，已跳过",
+                }
+
+        return {
+            "project_id": project_id,
+            "chapter_number": chapter_number,
+            "best_version_index": result.get("best_version_index", 0),
+            "variant_count": len(result.get("variants") or []),
+            "consistency_guard": guard_summary,
+        }
 
     async def _run_blueprint_task(
         self,
@@ -766,7 +1055,7 @@ class GenerationTaskRunner:
         task_id: str,
         project_id: str,
         user_id: int,
-    ) -> None:
+    ) -> Dict[str, Any]:
         await self._progress(task_id, 6, "准备蓝图任务", "正在整理对话历史")
         await self._raise_if_cancel_requested(task_id)
 
@@ -785,15 +1074,171 @@ class GenerationTaskRunner:
                 await self._set_project_blueprint_failed(project_id, user_id)
                 raise
 
-        await self._mark_task_completed(
-            task_id,
-            result={
-                "project_id": project_id,
-                "title": response.blueprint.title,
-            },
-            stage_label="蓝图完成",
-            status_message="蓝图生成完成",
+        return {
+            "project_id": project_id,
+            "title": response.blueprint.title,
+        }
+
+    async def _run_consistency_guard(
+        self,
+        *,
+        task_id: str,
+        session,
+        chapter: Chapter,
+        project_id: str,
+        chapter_number: int,
+        user_id: int,
+        generation_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        policy = await self._resolve_consistency_guard_policy(session)
+        if not policy.enabled:
+            return {
+                "enabled": False,
+                "status": "disabled",
+                "message": "一致性守护已关闭",
+            }
+
+        variants = generation_result.get("variants")
+        if not isinstance(variants, list) or not variants:
+            return {
+                "enabled": True,
+                "status": "skipped",
+                "message": "无可检查版本",
+            }
+
+        best_index = int(generation_result.get("best_version_index", 0) or 0)
+        best_index = max(0, min(best_index, len(variants) - 1))
+        best_variant = variants[best_index] if isinstance(variants[best_index], dict) else {}
+        chapter_text = str(best_variant.get("content") or "").strip()
+        if not chapter_text:
+            return {
+                "enabled": True,
+                "status": "skipped",
+                "message": "候选版本内容为空，跳过一致性守护",
+            }
+
+        await self._progress(task_id, 92, "一致性守护", "正在检查设定与章节一致性")
+        sync_session = getattr(session, "sync_session", session)
+        consistency_service = ConsistencyService(sync_session, LLMService(session))
+        check_result = await consistency_service.check_consistency(
+            project_id=project_id,
+            chapter_text=chapter_text,
+            user_id=user_id,
+            include_foreshadowing=True,
         )
+        report = self._format_consistency_report(check_result)
+        violations_total = len(report["violations"])
+        violations_to_fix = self._filter_guard_violations(
+            check_result.violations or [],
+            min_severity=policy.min_severity,
+            limit=policy.max_violations,
+        )
+
+        base_payload = {
+            "enabled": True,
+            "min_severity": policy.min_severity,
+            "auto_fix": policy.auto_fix,
+            "auto_select_fixed": policy.auto_select_fixed,
+            "violations_total": violations_total,
+            "violations_fixable": len(violations_to_fix),
+            "is_consistent": bool(report["is_consistent"]),
+            "summary": report["summary"],
+            "report": report,
+        }
+        checked_at = datetime.utcnow().isoformat()
+
+        target_version_id = best_variant.get("version_id")
+        target_version_pk: Optional[int] = None
+        if target_version_id is not None:
+            try:
+                target_version_pk = int(target_version_id)
+            except Exception:
+                target_version_pk = None
+            if target_version_pk is not None:
+                existing_version = await session.get(ChapterVersion, target_version_pk)
+                if existing_version:
+                    metadata = existing_version.metadata if isinstance(existing_version.metadata, dict) else {}
+                    metadata["consistency_guard"] = {
+                        "checked_at": checked_at,
+                        "report": report,
+                    }
+                    existing_version.metadata = metadata
+
+        if not violations_to_fix:
+            await session.commit()
+            return {
+                **base_payload,
+                "status": "passed" if bool(report["is_consistent"]) else "review_required",
+                "message": "一致性守护通过",
+            }
+
+        if not policy.auto_fix:
+            await session.commit()
+            return {
+                **base_payload,
+                "status": "review_required",
+                "message": "检测到冲突，已标记待人工修复",
+            }
+
+        await self._progress(task_id, 95, "一致性守护修复", "正在生成一致性修复版本")
+        fixed_content = await consistency_service.auto_fix(
+            project_id=project_id,
+            chapter_text=chapter_text,
+            violations=violations_to_fix,
+            user_id=user_id,
+        )
+        normalized_fixed = str(fixed_content or "").strip()
+        if not normalized_fixed or normalized_fixed == chapter_text:
+            await session.commit()
+            return {
+                **base_payload,
+                "status": "review_required",
+                "message": "一致性修复未生成有效差异，建议人工处理",
+            }
+
+        fix_label = f"guard-fix-{datetime.utcnow().strftime('%m%d%H%M%S')}"
+        fixed_meta = {
+            "source": "consistency_guard_auto_fix",
+            "fixed_from_version_id": target_version_pk,
+            "checked_at": checked_at,
+            "min_severity": policy.min_severity,
+            "report": report,
+        }
+        fixed_version = ChapterVersion(
+            chapter_id=chapter.id,
+            content=normalized_fixed,
+            version_label=fix_label,
+            metadata=fixed_meta,
+        )
+        session.add(fixed_version)
+        await session.flush()
+
+        auto_selected = False
+        if policy.auto_select_fixed:
+            chapter.selected_version_id = fixed_version.id
+            chapter.status = "successful"
+            chapter.word_count = len(normalized_fixed)
+            auto_selected = True
+
+        variants.append(
+            {
+                "index": len(variants),
+                "version_id": fixed_version.id,
+                "content": normalized_fixed,
+                "metadata": fixed_meta,
+            }
+        )
+        if auto_selected:
+            generation_result["best_version_index"] = len(variants) - 1
+
+        await session.commit()
+        return {
+            **base_payload,
+            "status": "fixed",
+            "message": "已生成一致性修复版本",
+            "fixed_version_id": fixed_version.id,
+            "auto_selected": auto_selected,
+        }
 
     async def _blueprint_progress(self, task_id: str, progress: int, stage: str, message: str) -> None:
         await self._progress(task_id, progress, stage, message)

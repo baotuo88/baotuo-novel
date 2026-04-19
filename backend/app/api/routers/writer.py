@@ -750,6 +750,9 @@ async def _build_writer_task_center_response(
         stalled_seconds = 0
         self_heal_hint: Optional[str] = None
         can_force_retry = False
+        consistency_guard_status: Optional[str] = None
+        consistency_guard_message: Optional[str] = None
+        consistency_fixed_version_id: Optional[int] = None
 
         if latest_task:
             queue_state = _queue_state_from_task_status(latest_task.status)
@@ -788,6 +791,16 @@ async def _build_writer_task_center_response(
                 self_heal_hint = (
                     "任务已进入自动重试流程，系统会在回退倒计时后重新执行。"
                 )
+            if isinstance(latest_task.result, dict):
+                guard_meta = latest_task.result.get("consistency_guard")
+                if isinstance(guard_meta, dict):
+                    consistency_guard_status = str(guard_meta.get("status") or "").strip() or None
+                    consistency_guard_message = str(guard_meta.get("message") or guard_meta.get("summary") or "").strip() or None
+                    fixed_version_id_raw = guard_meta.get("fixed_version_id")
+                    try:
+                        consistency_fixed_version_id = int(fixed_version_id_raw) if fixed_version_id_raw is not None else None
+                    except (TypeError, ValueError):
+                        consistency_fixed_version_id = None
             can_force_retry = bool(
                 queue_state == "active"
                 and int(latest_task.user_id) == int(user_id)
@@ -868,6 +881,9 @@ async def _build_writer_task_center_response(
                 stalled_seconds=stalled_seconds,
                 self_heal_hint=self_heal_hint,
                 can_force_retry=can_force_retry,
+                consistency_guard_status=consistency_guard_status,
+                consistency_guard_message=consistency_guard_message,
+                consistency_fixed_version_id=consistency_fixed_version_id,
             )
         )
 

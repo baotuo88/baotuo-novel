@@ -199,6 +199,31 @@ SYSTEM_CONFIG_DEFAULTS: list[SystemConfigDefault] = [
         description="每次生成章节的候选版本数量。",
     ),
     SystemConfigDefault(
+        key="writer.consistency_guard.enabled",
+        value_getter=lambda _config: "true",
+        description="是否在章节生成完成后执行一致性守护检查。",
+    ),
+    SystemConfigDefault(
+        key="writer.consistency_guard.min_severity",
+        value_getter=lambda _config: "major",
+        description="一致性守护自动修复阈值：critical/major/minor。",
+    ),
+    SystemConfigDefault(
+        key="writer.consistency_guard.auto_fix",
+        value_getter=lambda _config: "true",
+        description="一致性守护检测到阈值以上冲突时是否自动生成修复版本。",
+    ),
+    SystemConfigDefault(
+        key="writer.consistency_guard.auto_select_fixed",
+        value_getter=lambda _config: "true",
+        description="一致性守护生成修复版本后，是否自动设为当前选中版本。",
+    ),
+    SystemConfigDefault(
+        key="writer.consistency_guard.max_violations",
+        value_getter=lambda _config: "12",
+        description="一致性守护单次自动修复最多处理的冲突数量。",
+    ),
+    SystemConfigDefault(
         key="generation.task.worker_count",
         value_getter=lambda config: _to_optional_str(config.generation_task_workers),
         description="任务执行 worker 数量（运行中修改需重启服务生效）。",

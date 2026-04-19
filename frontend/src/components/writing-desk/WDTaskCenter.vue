@@ -78,6 +78,11 @@
               </div>
               <div class="md-body-small md-on-surface-variant mt-1">{{ item.status_message }}</div>
               <div class="md-body-small md-on-surface-variant mt-1">状态：{{ item.status }} · {{ item.word_count }} 字 · {{ item.age_minutes }} 分钟前更新</div>
+              <div v-if="item.consistency_guard_status" :class="['task-guard mt-2', `task-guard-${item.consistency_guard_status}`]">
+                <span class="task-guard-title">一致性守护：{{ consistencyGuardLabel(item.consistency_guard_status) }}</span>
+                <span v-if="item.consistency_guard_message" class="task-guard-message">{{ item.consistency_guard_message }}</span>
+                <span v-if="item.consistency_fixed_version_id" class="task-guard-message">修复版本 #{{ item.consistency_fixed_version_id }}</span>
+              </div>
               <div v-if="item.self_heal_hint" class="task-self-heal mt-2">
                 {{ item.self_heal_hint }}
               </div>
@@ -174,6 +179,16 @@ const failureCategoryLabel = (category?: string | null) => {
   if (category === 'config') return '配置错误'
   if (category === 'canceled') return '已取消'
   return ''
+}
+
+const consistencyGuardLabel = (status?: string | null) => {
+  if (status === 'passed') return '通过'
+  if (status === 'fixed') return '已自动修复'
+  if (status === 'review_required') return '需人工确认'
+  if (status === 'disabled') return '已关闭'
+  if (status === 'skipped') return '已跳过'
+  if (status === 'error') return '执行异常'
+  return status || '未知'
 }
 
 const formatFailureMessage = (item: WriterTaskCenterItem) => {
@@ -577,6 +592,46 @@ onUnmounted(() => {
   border-radius: 10px;
   padding: 6px 8px;
   line-height: 1.5;
+}
+
+.task-guard {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-guard-title {
+  font-weight: 600;
+}
+
+.task-guard-message {
+  color: inherit;
+}
+
+.task-guard-passed,
+.task-guard-fixed {
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.12);
+  color: #065f46;
+}
+
+.task-guard-review_required,
+.task-guard-skipped,
+.task-guard-disabled {
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.12);
+  color: #92400e;
+}
+
+.task-guard-error {
+  border: 1px solid rgba(239, 68, 68, 0.32);
+  background: rgba(239, 68, 68, 0.12);
+  color: #991b1b;
 }
 
 .task-actions {

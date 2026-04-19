@@ -143,6 +143,22 @@ export interface WriterTaskQueueItem {
   heartbeat_age_seconds?: number | null
   updated_at: string
   age_minutes: number
+  run_seconds?: number | null
+  current_stage_seconds?: number | null
+  stage_timeline?: Array<{
+    stage: string
+    entered_at?: string | null
+    updated_at?: string | null
+    progress_percent?: number
+  }>
+  llm_call_count?: number
+  llm_success_count?: number
+  llm_error_count?: number
+  llm_avg_latency_ms?: number | null
+  llm_top_model?: string | null
+  llm_top_provider?: string | null
+  consistency_guard_status?: string | null
+  consistency_guard_message?: string | null
 }
 
 export interface WriterTaskQueueSummary {

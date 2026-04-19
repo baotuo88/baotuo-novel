@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 import zipfile
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from typing import Dict, List, Optional, Sequence
 from urllib.parse import quote
 from uuid import uuid4
 
+import httpx
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +39,7 @@ class ExportService:
     """项目发布导出服务，支持 markdown/txt/docx/epub。"""
 
     SUPPORTED_FORMATS = {"markdown", "txt", "docx", "epub"}
+    SUPPORTED_TOC_STYLES = {"none", "compact", "detailed"}
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -72,12 +75,19 @@ class ExportService:
         end_chapter: Optional[int] = None,
         include_outline: bool = True,
         include_metadata: bool = True,
+        toc_style: str = "compact",
     ) -> ExportResult:
         normalized_format = (export_format or "").strip().lower()
         if normalized_format not in self.SUPPORTED_FORMATS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"不支持的导出格式: {export_format}",
+            )
+        normalized_toc_style = (toc_style or "compact").strip().lower()
+        if normalized_toc_style not in self.SUPPORTED_TOC_STYLES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"不支持的目录样式: {toc_style}",
             )
 
         if start_chapter and end_chapter and start_chapter > end_chapter:
@@ -99,6 +109,7 @@ class ExportService:
                 chapters=chapters,
                 include_outline=include_outline,
                 include_metadata=include_metadata,
+                toc_style=normalized_toc_style,
             ).encode("utf-8")
             media_type = "text/markdown; charset=utf-8"
             extension = "md"
@@ -108,6 +119,7 @@ class ExportService:
                 chapters=chapters,
                 include_outline=include_outline,
                 include_metadata=include_metadata,
+                toc_style=normalized_toc_style,
             ).encode("utf-8")
             media_type = "text/plain; charset=utf-8"
             extension = "txt"
@@ -117,6 +129,7 @@ class ExportService:
                 chapters=chapters,
                 include_outline=include_outline,
                 include_metadata=include_metadata,
+                toc_style=normalized_toc_style,
             )
             media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             extension = "docx"
@@ -138,6 +151,95 @@ class ExportService:
         safe_title = self._safe_filename(title)
         filename = f"{safe_title}_{scope}.{extension}"
         return ExportResult(content=content, filename=filename, media_type=media_type)
+
+    async def export_project_batch(
+        self,
+        *,
+        project_id: str,
+        user_id: int,
+        formats: Sequence[str],
+        start_chapter: Optional[int] = None,
+        end_chapter: Optional[int] = None,
+        include_outline: bool = True,
+        include_metadata: bool = True,
+        toc_style: str = "compact",
+    ) -> ExportResult:
+        normalized: List[str] = []
+        seen = set()
+        for item in formats:
+            name = str(item or "").strip().lower()
+            if not name or name in seen:
+                continue
+            if name not in self.SUPPORTED_FORMATS:
+                raise HTTPException(status_code=400, detail=f"不支持的导出格式: {item}")
+            seen.add(name)
+            normalized.append(name)
+        if not normalized:
+            raise HTTPException(status_code=400, detail="至少需要一个导出格式")
+        if len(normalized) > 8:
+            raise HTTPException(status_code=400, detail="批量导出格式数量不能超过 8")
+
+        entries: List[ExportResult] = []
+        for fmt in normalized:
+            entries.append(
+                await self.export_project(
+                    project_id=project_id,
+                    user_id=user_id,
+                    export_format=fmt,
+                    start_chapter=start_chapter,
+                    end_chapter=end_chapter,
+                    include_outline=include_outline,
+                    include_metadata=include_metadata,
+                    toc_style=toc_style,
+                )
+            )
+
+        project = await self.novel_service.ensure_project_owner(project_id, user_id)
+        title = self._resolve_project_title(project)
+        safe_title = self._safe_filename(title)
+        scope = (
+            f"ch{start_chapter}-{end_chapter}"
+            if (start_chapter is not None and end_chapter is not None)
+            else "all"
+        )
+        batch_name = f"{safe_title}_{scope}_bundle.zip"
+
+        buffer = io.BytesIO()
+        manifest = {
+            "project_id": project_id,
+            "title": title,
+            "created_at": datetime.utcnow().isoformat(),
+            "formats": normalized,
+            "file_count": len(entries),
+        }
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+            for item in entries:
+                archive.writestr(item.filename, item.content)
+
+        return ExportResult(
+            content=buffer.getvalue(),
+            filename=batch_name,
+            media_type="application/zip",
+        )
+
+    async def send_export_webhook(
+        self,
+        *,
+        webhook_url: str,
+        payload: Dict[str, object],
+        timeout_seconds: float = 6.0,
+    ) -> None:
+        url = str(webhook_url or "").strip()
+        if not url:
+            return
+        async with httpx.AsyncClient(timeout=max(1.0, float(timeout_seconds))) as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
 
     @staticmethod
     def build_content_disposition(filename: str) -> str:
@@ -228,6 +330,7 @@ class ExportService:
         chapters: Sequence[ExportChapter],
         include_outline: bool,
         include_metadata: bool,
+        toc_style: str,
     ) -> str:
         lines: List[str] = [f"# {title}", ""]
         if include_metadata:
@@ -241,6 +344,7 @@ class ExportService:
                     "",
                 ]
             )
+        lines.extend(self._build_toc_lines(chapters=chapters, toc_style=toc_style, format_name="markdown"))
 
         for chapter in chapters:
             lines.append(f"## 第{chapter.chapter_number}章 {chapter.title}")
@@ -264,6 +368,7 @@ class ExportService:
         chapters: Sequence[ExportChapter],
         include_outline: bool,
         include_metadata: bool,
+        toc_style: str,
     ) -> str:
         lines: List[str] = [title, "=" * max(8, len(title)), ""]
         if include_metadata:
@@ -277,6 +382,7 @@ class ExportService:
                     "",
                 ]
             )
+        lines.extend(self._build_toc_lines(chapters=chapters, toc_style=toc_style, format_name="txt"))
 
         for chapter in chapters:
             lines.append(f"第{chapter.chapter_number}章 {chapter.title}")
@@ -297,6 +403,7 @@ class ExportService:
         chapters: Sequence[ExportChapter],
         include_outline: bool,
         include_metadata: bool,
+        toc_style: str,
     ) -> bytes:
         paragraphs: List[str] = [title, ""]
         if include_metadata:
@@ -307,6 +414,7 @@ class ExportService:
                     "",
                 ]
             )
+        paragraphs.extend(self._build_toc_lines(chapters=chapters, toc_style=toc_style, format_name="docx"))
         for chapter in chapters:
             paragraphs.append(f"第{chapter.chapter_number}章 {chapter.title}")
             if include_outline and chapter.summary:
@@ -458,6 +566,46 @@ class ExportService:
             for file_name, _, chapter_xhtml in chapter_files:
                 archive.writestr(f"OEBPS/{file_name}", chapter_xhtml, compress_type=zipfile.ZIP_DEFLATED)
         return buffer.getvalue()
+
+    @staticmethod
+    def _build_toc_lines(
+        *,
+        chapters: Sequence[ExportChapter],
+        toc_style: str,
+        format_name: str,
+    ) -> List[str]:
+        style = (toc_style or "compact").strip().lower()
+        if style == "none" or not chapters:
+            return []
+
+        if format_name == "markdown":
+            lines: List[str] = ["## 目录", ""]
+            for chapter in chapters:
+                if style == "detailed":
+                    summary = (chapter.summary or "").strip().replace("\n", " ")
+                    if summary:
+                        summary = summary[:48] + ("…" if len(summary) > 48 else "")
+                        lines.append(f"- 第{chapter.chapter_number}章 {chapter.title} - {summary}")
+                    else:
+                        lines.append(f"- 第{chapter.chapter_number}章 {chapter.title}")
+                else:
+                    lines.append(f"- 第{chapter.chapter_number}章 {chapter.title}")
+            lines.extend(["", "---", ""])
+            return lines
+
+        lines = ["目录", "-" * 16]
+        for chapter in chapters:
+            if style == "detailed":
+                summary = (chapter.summary or "").strip().replace("\n", " ")
+                if summary:
+                    summary = summary[:48] + ("…" if len(summary) > 48 else "")
+                    lines.append(f"第{chapter.chapter_number}章 {chapter.title} | {summary}")
+                else:
+                    lines.append(f"第{chapter.chapter_number}章 {chapter.title}")
+            else:
+                lines.append(f"第{chapter.chapter_number}章 {chapter.title}")
+        lines.extend(["", ""])
+        return lines
 
     @staticmethod
     def _build_epub_intro_xhtml(

@@ -282,6 +282,9 @@ class WriterTaskCenterItem(BaseModel):
     stalled_seconds: int = 0
     self_heal_hint: Optional[str] = None
     can_force_retry: bool = False
+    consistency_guard_status: Optional[str] = None
+    consistency_guard_message: Optional[str] = None
+    consistency_fixed_version_id: Optional[int] = None
 
 
 class WriterTaskCenterResponse(BaseModel):

@@ -256,6 +256,8 @@ import TerminologySection from '@/components/novel-detail/TerminologySection.vue
 import WorldGraphSection from '@/components/novel-detail/WorldGraphSection.vue'
 import QualityDashboardSection from '@/components/novel-detail/QualityDashboardSection.vue'
 import PublishCenterSection from '@/components/novel-detail/PublishCenterSection.vue'
+import MaterialLibrarySection from '@/components/novel-detail/MaterialLibrarySection.vue'
+import ProjectBackupSection from '@/components/novel-detail/ProjectBackupSection.vue'
 
 interface Props {
   isAdmin?: boolean
@@ -284,6 +286,8 @@ const sections: Array<{ key: SectionKey; label: string; description: string }> =
         { key: 'world_graph' as SectionKey, label: '世界图谱', description: '结构树与关系网' },
         { key: 'quality_dashboard' as SectionKey, label: '质量看板', description: '一致性与闭环质量' },
         { key: 'publish_center' as SectionKey, label: '发布中心', description: '多格式导出与发布' },
+        { key: 'material_library' as SectionKey, label: '素材库', description: '灵感与资料统一管理' },
+        { key: 'project_backup' as SectionKey, label: '备份恢复', description: '项目导入导出与恢复' },
       ]
     : []),
   { key: 'timeline', label: '故事时间线', description: '章节事件与时间锚点' },
@@ -302,6 +306,8 @@ const sectionComponents: Record<SectionKey, any> = {
   world_graph: WorldGraphSection,
   quality_dashboard: QualityDashboardSection,
   publish_center: PublishCenterSection,
+  material_library: MaterialLibrarySection,
+  project_backup: ProjectBackupSection,
   timeline: TimelineSection,
   terminology: TerminologySection,
   chapter_outline: ChapterOutlineSection,
@@ -348,6 +354,15 @@ const getSectionIcon = (key: SectionKey) => {
       h('path', { d: 'M7 10l5 5 5-5' }),
       h('rect', { x: 4, y: 17, width: 16, height: 4, rx: 1.5 })
     ]),
+    material_library: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
+      h('path', { d: 'M4 5h16v14H4z' }),
+      h('path', { d: 'M8 9h8M8 13h8M8 17h4' })
+    ]),
+    project_backup: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
+      h('path', { d: 'M12 3v12' }),
+      h('path', { d: 'M8 7l4-4 4 4' }),
+      h('path', { d: 'M5 14v5h14v-5' })
+    ]),
     timeline: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
       h('circle', { cx: 5, cy: 6, r: 1.5 }),
       h('circle', { cx: 5, cy: 12, r: 1.5 }),
@@ -389,6 +404,8 @@ const sectionLoading = reactive<Record<SectionKey, boolean>>({
   world_graph: false,
   quality_dashboard: false,
   publish_center: false,
+  material_library: false,
+  project_backup: false,
   timeline: false,
   terminology: false,
   chapter_outline: false,
@@ -404,6 +421,8 @@ const sectionError = reactive<Record<SectionKey, string | null>>({
   world_graph: null,
   quality_dashboard: null,
   publish_center: null,
+  material_library: null,
+  project_backup: null,
   timeline: null,
   terminology: null,
   chapter_outline: null,
@@ -557,7 +576,7 @@ const loadSection = async (section: SectionKey, force = false) => {
   }
   
   // 分析型Section使用独立的API，不需要在这里加载
-  const analysisSections: SectionKey[] = ['emotion_curve', 'foreshadowing', 'timeline', 'terminology', 'publish_center']
+  const analysisSections: SectionKey[] = ['emotion_curve', 'foreshadowing', 'timeline', 'terminology', 'publish_center', 'material_library', 'project_backup']
   if (analysisSections.includes(section)) {
     return
   }
@@ -637,6 +656,15 @@ const componentProps = computed(() => {
     case 'publish_center':
       return {
         data: data || null,
+        projectId
+      }
+    case 'material_library':
+      return {
+        projectId,
+        editable
+      }
+    case 'project_backup':
+      return {
         projectId
       }
     case 'timeline':

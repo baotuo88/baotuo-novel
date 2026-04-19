@@ -6,7 +6,7 @@ import io
 import math
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -980,6 +980,27 @@ async def get_writer_task_queue(
         # 防止脏数据拉高统计
         return min(seconds, 7 * 24 * 3600)
 
+    def _parse_datetime_value(value: Any) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            dt = value
+        elif isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            if text.endswith("Z"):
+                text = f"{text[:-1]}+00:00"
+            try:
+                dt = datetime.fromisoformat(text)
+            except ValueError:
+                return None
+        else:
+            return None
+        if getattr(dt, "tzinfo", None) is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
     base_filters = [GenerationTask.task_type.in_(task_types)]
     if project_id:
         base_filters.append(GenerationTask.project_id == project_id)
@@ -1144,6 +1165,69 @@ async def get_writer_task_queue(
             heartbeat_anchor = heartbeat_at or updated_at or task.started_at or task.created_at
             heartbeat_age_seconds = _age_seconds(heartbeat_anchor)
 
+        checkpoint = task.checkpoint if isinstance(task.checkpoint, dict) else {}
+        stage_timeline_raw = checkpoint.get("stage_timeline")
+        stage_timeline: list[dict] = []
+        if isinstance(stage_timeline_raw, list):
+            for item in stage_timeline_raw[-16:]:
+                if not isinstance(item, dict):
+                    continue
+                stage_name = str(item.get("stage") or "").strip()
+                if not stage_name:
+                    continue
+                entered_at = _parse_datetime_value(item.get("entered_at") or item.get("updated_at"))
+                updated_at_stage = _parse_datetime_value(item.get("updated_at") or item.get("entered_at"))
+                stage_timeline.append(
+                    {
+                        "stage": stage_name,
+                        "entered_at": entered_at.isoformat() if entered_at else None,
+                        "updated_at": updated_at_stage.isoformat() if updated_at_stage else None,
+                        "progress_percent": int(item.get("progress_percent") or 0),
+                    }
+                )
+
+        execution_meta = task.result if isinstance(task.result, dict) else {}
+        execution_info = execution_meta.get("execution") if isinstance(execution_meta.get("execution"), dict) else {}
+        run_seconds_raw = execution_info.get("duration_seconds")
+        try:
+            run_seconds = float(run_seconds_raw) if run_seconds_raw is not None else None
+        except (TypeError, ValueError):
+            run_seconds = None
+        if run_seconds is None:
+            run_anchor_end = task.finished_at or now_utc
+            run_seconds = _duration_seconds(task.started_at or task.created_at, run_anchor_end)
+            if run_seconds is not None:
+                run_seconds = round(float(run_seconds), 2)
+
+        current_stage_seconds: Optional[float] = None
+        if stage_timeline:
+            last_stage = stage_timeline[-1]
+            stage_start_dt = _parse_datetime_value(last_stage.get("entered_at"))
+            if stage_start_dt:
+                stage_end_dt = task.finished_at if status_value in {TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_CANCELED} else now_utc
+                stage_end_dt = stage_end_dt if getattr(stage_end_dt, "tzinfo", None) is not None else stage_end_dt.replace(tzinfo=timezone.utc)
+                if stage_end_dt >= stage_start_dt:
+                    current_stage_seconds = round((stage_end_dt - stage_start_dt).total_seconds(), 2)
+
+        llm_metrics = execution_meta.get("llm_metrics") if isinstance(execution_meta.get("llm_metrics"), dict) else {}
+        llm_call_count = int(llm_metrics.get("call_count") or 0)
+        llm_success_count = int(llm_metrics.get("success_count") or 0)
+        llm_error_count = int(llm_metrics.get("error_count") or 0)
+        llm_top_model = str(llm_metrics.get("top_model") or "").strip() or None
+        llm_top_provider = str(llm_metrics.get("top_provider") or "").strip() or None
+        llm_avg_latency_raw = llm_metrics.get("avg_latency_ms")
+        try:
+            llm_avg_latency_ms = round(float(llm_avg_latency_raw), 2) if llm_avg_latency_raw is not None else None
+        except (TypeError, ValueError):
+            llm_avg_latency_ms = None
+
+        consistency_guard_status = None
+        consistency_guard_message = None
+        guard_meta = execution_meta.get("consistency_guard") if isinstance(execution_meta.get("consistency_guard"), dict) else {}
+        if guard_meta:
+            consistency_guard_status = str(guard_meta.get("status") or "").strip() or None
+            consistency_guard_message = str(guard_meta.get("message") or guard_meta.get("summary") or "").strip() or None
+
         items.append(
             WriterTaskQueueItem(
                 task_id=task.id,
@@ -1167,6 +1251,17 @@ async def get_writer_task_queue(
                 heartbeat_age_seconds=heartbeat_age_seconds,
                 updated_at=_to_naive_utc(updated_at) or datetime.utcnow(),
                 age_minutes=age_minutes,
+                run_seconds=run_seconds,
+                current_stage_seconds=current_stage_seconds,
+                stage_timeline=stage_timeline,
+                llm_call_count=llm_call_count,
+                llm_success_count=llm_success_count,
+                llm_error_count=llm_error_count,
+                llm_avg_latency_ms=llm_avg_latency_ms,
+                llm_top_model=llm_top_model,
+                llm_top_provider=llm_top_provider,
+                consistency_guard_status=consistency_guard_status,
+                consistency_guard_message=consistency_guard_message,
             )
         )
 

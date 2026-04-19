@@ -288,6 +288,9 @@ export interface WriterTaskCenterItem {
   stalled_seconds?: number
   self_heal_hint?: string | null
   can_force_retry?: boolean
+  consistency_guard_status?: string | null
+  consistency_guard_message?: string | null
+  consistency_fixed_version_id?: number | null
 }
 
 export interface WriterTaskCenterResponse {
@@ -387,6 +390,8 @@ export type AnalysisSectionType =
   | 'terminology'
   | 'quality_dashboard'
   | 'publish_center'
+  | 'material_library'
+  | 'project_backup'
 
 // 所有Section的联合类型
 export type AllSectionType = NovelSectionType | AnalysisSectionType
@@ -437,6 +442,7 @@ export interface FactionRelationshipItem {
 }
 
 export type PublishFormat = 'markdown' | 'txt' | 'docx' | 'epub'
+export type PublishTocStyle = 'none' | 'compact' | 'detailed'
 
 export interface PublishSummaryResponse {
   project_id: string
@@ -448,6 +454,52 @@ export interface PublishSummaryResponse {
   last_chapter_number?: number | null
   latest_generated_chapter?: number | null
   generated_at: string
+}
+
+export interface ProjectMaterialItem {
+  id: string
+  title: string
+  material_type: string
+  content: string
+  tags: string[]
+  source?: string | null
+  source_url?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectMaterialListResponse {
+  project_id: string
+  total: number
+  page: number
+  page_size: number
+  items: ProjectMaterialItem[]
+}
+
+export interface ProjectMaterialPayload {
+  title: string
+  material_type?: string
+  content?: string
+  tags?: string[]
+  source?: string | null
+  source_url?: string | null
+}
+
+export interface ProjectBackupImportPayload {
+  backup: Record<string, any>
+}
+
+export interface ProjectBackupImportResponse {
+  project_id: string
+  title: string
+  stats: Record<string, number>
+  message: string
+}
+
+export interface ProjectBackupRestoreResponse {
+  project_id: string
+  stats: Record<string, number>
+  message: string
 }
 
 export interface WritingPresetItem {
@@ -756,6 +808,8 @@ export class NovelAPI {
       end_chapter?: number
       include_outline?: boolean
       include_metadata?: boolean
+      toc_style?: PublishTocStyle
+      webhook_url?: string
     }
   ): Promise<void> {
     const params = new URLSearchParams()
@@ -764,6 +818,8 @@ export class NovelAPI {
     if (query.end_chapter != null) params.set('end_chapter', String(query.end_chapter))
     if (query.include_outline != null) params.set('include_outline', String(query.include_outline))
     if (query.include_metadata != null) params.set('include_metadata', String(query.include_metadata))
+    if (query.toc_style) params.set('toc_style', query.toc_style)
+    if (query.webhook_url) params.set('webhook_url', query.webhook_url)
 
     const authStore = useAuthStore()
     const headers = new Headers()
@@ -799,6 +855,144 @@ export class NovelAPI {
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(href)
+  }
+
+  static async downloadPublishBatchExport(
+    projectId: string,
+    query: {
+      formats: PublishFormat[]
+      start_chapter?: number
+      end_chapter?: number
+      include_outline?: boolean
+      include_metadata?: boolean
+      toc_style?: PublishTocStyle
+      webhook_url?: string
+    }
+  ): Promise<void> {
+    const params = new URLSearchParams()
+    params.set('formats', (query.formats || []).join(','))
+    if (query.start_chapter != null) params.set('start_chapter', String(query.start_chapter))
+    if (query.end_chapter != null) params.set('end_chapter', String(query.end_chapter))
+    if (query.include_outline != null) params.set('include_outline', String(query.include_outline))
+    if (query.include_metadata != null) params.set('include_metadata', String(query.include_metadata))
+    if (query.toc_style) params.set('toc_style', query.toc_style)
+    if (query.webhook_url) params.set('webhook_url', query.webhook_url)
+
+    const authStore = useAuthStore()
+    const headers = new Headers()
+    if (authStore.isAuthenticated && authStore.token) {
+      headers.set('Authorization', `Bearer ${authStore.token}`)
+    }
+    const response = await fetch(
+      `${API_BASE_URL}${API_PREFIX}/projects/${projectId}/publish/export-batch?${params.toString()}`,
+      { method: 'GET', headers }
+    )
+    if (response.status === 401) {
+      authStore.logout()
+      router.push('/login')
+      throw new Error('会话已过期，请重新登录')
+    }
+    if (!response.ok) {
+      const detail = await extractErrorMessage(response)
+      throw new Error(normalizeErrorMessage(response.status, detail))
+    }
+    const blob = await response.blob()
+    const fallbackName = `novel_export_bundle_${Date.now()}.zip`
+    const filename = parseDownloadFilename(response.headers.get('content-disposition'), fallbackName)
+    const href = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = href
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(href)
+  }
+
+  static async listProjectMaterials(
+    projectId: string,
+    query: { page?: number; page_size?: number; keyword?: string; material_type?: string } = {}
+  ): Promise<ProjectMaterialListResponse> {
+    const params = new URLSearchParams()
+    if (query.page != null) params.set('page', String(query.page))
+    if (query.page_size != null) params.set('page_size', String(query.page_size))
+    if (query.keyword) params.set('keyword', query.keyword)
+    if (query.material_type) params.set('material_type', query.material_type)
+    const queryString = params.toString()
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/materials${queryString ? `?${queryString}` : ''}`)
+  }
+
+  static async createProjectMaterial(projectId: string, payload: ProjectMaterialPayload): Promise<ProjectMaterialItem> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/materials`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  }
+
+  static async updateProjectMaterial(
+    projectId: string,
+    materialId: string,
+    payload: ProjectMaterialPayload
+  ): Promise<ProjectMaterialItem> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/materials/${encodeURIComponent(materialId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    })
+  }
+
+  static async deleteProjectMaterial(projectId: string, materialId: string): Promise<{ project_id: string; deleted: boolean; material_id: string }> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/materials/${encodeURIComponent(materialId)}`, {
+      method: 'DELETE'
+    })
+  }
+
+  static async downloadProjectBackup(projectId: string): Promise<void> {
+    const authStore = useAuthStore()
+    const headers = new Headers()
+    if (authStore.isAuthenticated && authStore.token) {
+      headers.set('Authorization', `Bearer ${authStore.token}`)
+    }
+    const response = await fetch(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/backup/export`, {
+      method: 'GET',
+      headers
+    })
+    if (response.status === 401) {
+      authStore.logout()
+      router.push('/login')
+      throw new Error('会话已过期，请重新登录')
+    }
+    if (!response.ok) {
+      const detail = await extractErrorMessage(response)
+      throw new Error(normalizeErrorMessage(response.status, detail))
+    }
+    const blob = await response.blob()
+    const fallbackName = `project_backup_${Date.now()}.json`
+    const filename = parseDownloadFilename(response.headers.get('content-disposition'), fallbackName)
+    const href = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = href
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(href)
+  }
+
+  static async importProjectBackup(payload: ProjectBackupImportPayload): Promise<ProjectBackupImportResponse> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/backup/import`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  }
+
+  static async restoreProjectFromBackup(
+    projectId: string,
+    payload: ProjectBackupImportPayload
+  ): Promise<ProjectBackupRestoreResponse> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/backup/restore`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
   }
 
   static async saveProjectTimeline(

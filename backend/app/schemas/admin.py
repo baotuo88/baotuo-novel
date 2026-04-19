@@ -147,6 +147,17 @@ class WriterTaskQueueItem(BaseModel):
     heartbeat_age_seconds: Optional[int] = None
     updated_at: datetime
     age_minutes: int
+    run_seconds: Optional[float] = None
+    current_stage_seconds: Optional[float] = None
+    stage_timeline: list[dict] = Field(default_factory=list)
+    llm_call_count: int = 0
+    llm_success_count: int = 0
+    llm_error_count: int = 0
+    llm_avg_latency_ms: Optional[float] = None
+    llm_top_model: Optional[str] = None
+    llm_top_provider: Optional[str] = None
+    consistency_guard_status: Optional[str] = None
+    consistency_guard_message: Optional[str] = None
 
 
 class WriterTaskQueueSummary(BaseModel):

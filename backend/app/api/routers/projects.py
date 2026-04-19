@@ -1,6 +1,9 @@
 # AIMETA P=项目资源API_宪法人格记忆等|R=项目资源管理|NR=不含生成逻辑|E=route:GET_PUT_/api/projects/*|X=http|A=资源接口|D=fastapi,sqlalchemy|S=db|RD=./README.ai
+import json
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -21,12 +24,14 @@ from ...services.faction_service import FactionService
 from ...services.llm_service import LLMService
 from ...services.memory_layer_service import MemoryLayerService
 from ...services.novel_service import NovelService
+from ...services.project_backup_service import ProjectBackupService
 from ...services.prompt_service import PromptService
 from ...services.export_service import ExportService
 from ...services.writer_persona_service import WriterPersonaService
 from ...models.project_memory import ProjectMemory
 
 router = APIRouter(prefix="/api/projects", tags=["Projects"])
+logger = logging.getLogger(__name__)
 
 
 class PersonaPayload(BaseModel):
@@ -147,6 +152,52 @@ class PublishSummaryResponse(BaseModel):
     generated_at: str
 
 
+class ProjectMaterialPayload(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
+    material_type: str = Field(default="note", min_length=1, max_length=32)
+    content: str = Field(default="")
+    tags: List[str] = Field(default_factory=list)
+    source: Optional[str] = Field(default=None, max_length=160)
+    source_url: Optional[str] = Field(default=None, max_length=500)
+
+
+class ProjectMaterialItem(BaseModel):
+    id: str
+    title: str
+    material_type: str
+    content: str
+    tags: List[str] = Field(default_factory=list)
+    source: Optional[str] = None
+    source_url: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class ProjectMaterialListResponse(BaseModel):
+    project_id: str
+    total: int
+    page: int
+    page_size: int
+    items: List[ProjectMaterialItem]
+
+
+class ProjectBackupImportPayload(BaseModel):
+    backup: Dict[str, Any]
+
+
+class ProjectBackupImportResponse(BaseModel):
+    project_id: str
+    title: str
+    stats: Dict[str, int]
+    message: str
+
+
+class ProjectBackupRestoreResponse(BaseModel):
+    project_id: str
+    stats: Dict[str, int]
+    message: str
+
+
 def _model_to_dict(instance: Any) -> Optional[Dict[str, Any]]:
     if instance is None:
         return None
@@ -232,6 +283,78 @@ def _short_text(value: Any, max_length: int = 72) -> str:
     if len(text) <= max_length:
         return text
     return f"{text[: max_length - 1]}…"
+
+
+def _normalize_material_tags(tags: Any) -> List[str]:
+    if not isinstance(tags, list):
+        return []
+    output: List[str] = []
+    seen: set[str] = set()
+    for item in tags:
+        value = str(item or "").strip()
+        if not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(value[:32])
+    return output[:16]
+
+
+def _normalize_material_item(raw: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    item_id = str(raw.get("id") or "").strip() or uuid4().hex
+    title = str(raw.get("title") or "").strip()
+    if not title:
+        return None
+    material_type = str(raw.get("material_type") or "note").strip() or "note"
+    content = str(raw.get("content") or "")
+    source = str(raw.get("source") or "").strip() or None
+    source_url = str(raw.get("source_url") or "").strip() or None
+    created_at = str(raw.get("created_at") or datetime.utcnow().isoformat())
+    updated_at = str(raw.get("updated_at") or created_at)
+    return {
+        "id": item_id,
+        "title": title[:120],
+        "material_type": material_type[:32],
+        "content": content,
+        "tags": _normalize_material_tags(raw.get("tags")),
+        "source": source[:160] if source else None,
+        "source_url": source_url[:500] if source_url else None,
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
+def _extract_material_library(memory: Optional[ProjectMemory]) -> List[Dict[str, Any]]:
+    if not memory or not isinstance(memory.extra, dict):
+        return []
+    raw_items = memory.extra.get("material_library")
+    if not isinstance(raw_items, list):
+        return []
+    output: List[Dict[str, Any]] = []
+    for raw in raw_items:
+        normalized = _normalize_material_item(raw)
+        if normalized:
+            output.append(normalized)
+    output.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+    return output
+
+
+async def _get_or_create_project_memory(session: AsyncSession, project_id: str) -> ProjectMemory:
+    memory = (
+        await session.execute(
+            select(ProjectMemory).where(ProjectMemory.project_id == project_id)
+        )
+    ).scalars().first()
+    if memory:
+        return memory
+    memory = ProjectMemory(project_id=project_id, extra={})
+    session.add(memory)
+    await session.flush()
+    return memory
 
 
 def _safe_id_fragment(value: Any) -> str:
@@ -684,6 +807,141 @@ async def put_terminology_dictionary(
     return {"project_id": project_id, "items": normalized_items, "count": len(normalized_items)}
 
 
+@router.get("/{project_id}/materials", response_model=ProjectMaterialListResponse)
+async def get_project_materials(
+    project_id: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=12, ge=1, le=100),
+    keyword: Optional[str] = Query(default=None),
+    material_type: Optional[str] = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> ProjectMaterialListResponse:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    memory = (
+        await session.execute(
+            select(ProjectMemory).where(ProjectMemory.project_id == project_id)
+        )
+    ).scalars().first()
+    items = _extract_material_library(memory)
+    key = str(keyword or "").strip().lower()
+    type_filter = str(material_type or "").strip().lower()
+    if key:
+        items = [
+            item for item in items
+            if key in str(item.get("title") or "").lower()
+            or key in str(item.get("content") or "").lower()
+            or any(key in str(tag).lower() for tag in (item.get("tags") or []))
+        ]
+    if type_filter:
+        items = [item for item in items if str(item.get("material_type") or "").lower() == type_filter]
+
+    total = len(items)
+    start = (page - 1) * page_size
+    end = start + page_size
+    paged = items[start:end]
+    return ProjectMaterialListResponse(
+        project_id=project_id,
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=[ProjectMaterialItem(**item) for item in paged],
+    )
+
+
+@router.post("/{project_id}/materials", response_model=ProjectMaterialItem)
+async def create_project_material(
+    project_id: str,
+    payload: ProjectMaterialPayload,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> ProjectMaterialItem:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    memory = await _get_or_create_project_memory(session, project_id)
+    now_iso = datetime.utcnow().isoformat()
+    material = {
+        "id": uuid4().hex,
+        "title": payload.title.strip()[:120],
+        "material_type": payload.material_type.strip()[:32] or "note",
+        "content": payload.content,
+        "tags": _normalize_material_tags(payload.tags),
+        "source": payload.source.strip()[:160] if payload.source else None,
+        "source_url": payload.source_url.strip()[:500] if payload.source_url else None,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    current_items = _extract_material_library(memory)
+    current_items.insert(0, material)
+    extra = memory.extra if isinstance(memory.extra, dict) else {}
+    memory.extra = {**extra, "material_library": current_items}
+    await session.commit()
+    return ProjectMaterialItem(**material)
+
+
+@router.put("/{project_id}/materials/{material_id}", response_model=ProjectMaterialItem)
+async def update_project_material(
+    project_id: str,
+    material_id: str,
+    payload: ProjectMaterialPayload,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> ProjectMaterialItem:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    memory = await _get_or_create_project_memory(session, project_id)
+    current_items = _extract_material_library(memory)
+    target_id = str(material_id or "").strip()
+    now_iso = datetime.utcnow().isoformat()
+
+    updated: Optional[Dict[str, Any]] = None
+    for item in current_items:
+        if str(item.get("id") or "").strip() != target_id:
+            continue
+        item["title"] = payload.title.strip()[:120]
+        item["material_type"] = payload.material_type.strip()[:32] or "note"
+        item["content"] = payload.content
+        item["tags"] = _normalize_material_tags(payload.tags)
+        item["source"] = payload.source.strip()[:160] if payload.source else None
+        item["source_url"] = payload.source_url.strip()[:500] if payload.source_url else None
+        item["updated_at"] = now_iso
+        updated = item
+        break
+    if not updated:
+        raise HTTPException(status_code=404, detail="素材不存在")
+
+    extra = memory.extra if isinstance(memory.extra, dict) else {}
+    memory.extra = {**extra, "material_library": current_items}
+    await session.commit()
+    return ProjectMaterialItem(**updated)
+
+
+@router.delete("/{project_id}/materials/{material_id}")
+async def delete_project_material(
+    project_id: str,
+    material_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> Dict[str, Any]:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    memory = await _get_or_create_project_memory(session, project_id)
+    target_id = str(material_id or "").strip()
+    items = _extract_material_library(memory)
+    filtered = [item for item in items if str(item.get("id") or "").strip() != target_id]
+    if len(filtered) == len(items):
+        raise HTTPException(status_code=404, detail="素材不存在")
+    extra = memory.extra if isinstance(memory.extra, dict) else {}
+    memory.extra = {**extra, "material_library": filtered}
+    await session.commit()
+    return {"project_id": project_id, "deleted": True, "material_id": target_id}
+
+
 @router.get("/{project_id}/factions")
 async def get_factions(
     project_id: str,
@@ -1063,6 +1321,8 @@ async def export_project_publish(
     end_chapter: Optional[int] = Query(default=None, ge=1),
     include_outline: bool = Query(default=True),
     include_metadata: bool = Query(default=True),
+    toc_style: str = Query(default="compact"),
+    webhook_url: Optional[str] = Query(default=None),
     session: AsyncSession = Depends(get_session),
     current_user: UserInDB = Depends(get_current_user),
 ):
@@ -1075,12 +1335,143 @@ async def export_project_publish(
         end_chapter=end_chapter,
         include_outline=include_outline,
         include_metadata=include_metadata,
+        toc_style=toc_style,
     )
+    if webhook_url:
+        webhook_payload = {
+            "event": "publish.export.completed",
+            "project_id": project_id,
+            "format": export_format,
+            "filename": result.filename,
+            "size_bytes": len(result.content),
+            "generated_at": datetime.utcnow().isoformat(),
+            "start_chapter": start_chapter,
+            "end_chapter": end_chapter,
+            "toc_style": toc_style,
+        }
+        try:
+            await export_service.send_export_webhook(
+                webhook_url=webhook_url,
+                payload=webhook_payload,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("发布导出回调失败: project=%s webhook=%s error=%s", project_id, webhook_url, exc)
     headers = {
         "Content-Disposition": ExportService.build_content_disposition(result.filename),
         "Cache-Control": "no-store",
     }
     return StreamingResponse(iter([result.content]), media_type=result.media_type, headers=headers)
+
+
+@router.get("/{project_id}/publish/export-batch")
+async def export_project_publish_batch(
+    project_id: str,
+    formats: str = Query("markdown,txt"),
+    start_chapter: Optional[int] = Query(default=None, ge=1),
+    end_chapter: Optional[int] = Query(default=None, ge=1),
+    include_outline: bool = Query(default=True),
+    include_metadata: bool = Query(default=True),
+    toc_style: str = Query(default="compact"),
+    webhook_url: Optional[str] = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+):
+    export_service = ExportService(session)
+    format_items = [item.strip().lower() for item in str(formats or "").split(",") if item.strip()]
+    result = await export_service.export_project_batch(
+        project_id=project_id,
+        user_id=current_user.id,
+        formats=format_items,
+        start_chapter=start_chapter,
+        end_chapter=end_chapter,
+        include_outline=include_outline,
+        include_metadata=include_metadata,
+        toc_style=toc_style,
+    )
+
+    if webhook_url:
+        webhook_payload = {
+            "event": "publish.export.batch.completed",
+            "project_id": project_id,
+            "formats": format_items,
+            "filename": result.filename,
+            "size_bytes": len(result.content),
+            "generated_at": datetime.utcnow().isoformat(),
+            "start_chapter": start_chapter,
+            "end_chapter": end_chapter,
+            "toc_style": toc_style,
+        }
+        try:
+            await export_service.send_export_webhook(
+                webhook_url=webhook_url,
+                payload=webhook_payload,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("发布批量导出回调失败: project=%s webhook=%s error=%s", project_id, webhook_url, exc)
+
+    headers = {
+        "Content-Disposition": ExportService.build_content_disposition(result.filename),
+        "Cache-Control": "no-store",
+    }
+    return StreamingResponse(iter([result.content]), media_type=result.media_type, headers=headers)
+
+
+@router.get("/{project_id}/backup/export")
+async def export_project_backup(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+):
+    backup_service = ProjectBackupService(session)
+    payload = await backup_service.export_project_backup(project_id=project_id, user_id=current_user.id)
+    title = str(((payload.get("project") or {}).get("title") if isinstance(payload.get("project"), dict) else "project_backup") or "project_backup")
+    safe_title = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in title.strip())[:80] or "project_backup"
+    filename = f"{safe_title}_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    headers = {
+        "Content-Disposition": ExportService.build_content_disposition(filename),
+        "Cache-Control": "no-store",
+    }
+    return StreamingResponse(iter([content]), media_type="application/json; charset=utf-8", headers=headers)
+
+
+@router.post("/backup/import", response_model=ProjectBackupImportResponse)
+async def import_project_backup(
+    payload: ProjectBackupImportPayload,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> ProjectBackupImportResponse:
+    backup_service = ProjectBackupService(session)
+    result = await backup_service.import_backup_as_new_project(
+        user_id=current_user.id,
+        payload=payload.backup,
+    )
+    return ProjectBackupImportResponse(
+        project_id=result["project_id"],
+        title=result["title"],
+        stats=result["stats"],
+        message="备份已导入为新项目",
+    )
+
+
+@router.post("/{project_id}/backup/restore", response_model=ProjectBackupRestoreResponse)
+async def restore_project_backup(
+    project_id: str,
+    payload: ProjectBackupImportPayload,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> ProjectBackupRestoreResponse:
+    backup_service = ProjectBackupService(session)
+    stats = await backup_service.restore_backup_to_project(
+        project_id=project_id,
+        user_id=current_user.id,
+        payload=payload.backup,
+    )
+    return ProjectBackupRestoreResponse(
+        project_id=project_id,
+        stats=stats,
+        message="备份已恢复到当前项目",
+    )
 
 
 @router.get("/{project_id}/quality-dashboard")
