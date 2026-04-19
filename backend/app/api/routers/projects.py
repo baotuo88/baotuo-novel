@@ -2,7 +2,8 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,7 @@ from ...services.llm_service import LLMService
 from ...services.memory_layer_service import MemoryLayerService
 from ...services.novel_service import NovelService
 from ...services.prompt_service import PromptService
+from ...services.export_service import ExportService
 from ...services.writer_persona_service import WriterPersonaService
 from ...models.project_memory import ProjectMemory
 
@@ -131,6 +133,18 @@ class WorldGraphResponse(BaseModel):
     world_tree: Dict[str, Any]
     relation_graph: Dict[str, Any]
     stats: Dict[str, int]
+
+
+class PublishSummaryResponse(BaseModel):
+    project_id: str
+    title: str
+    chapter_total: int
+    outline_total: int
+    generated_chapter_total: int
+    first_chapter_number: Optional[int] = None
+    last_chapter_number: Optional[int] = None
+    latest_generated_chapter: Optional[int] = None
+    generated_at: str
 
 
 def _model_to_dict(instance: Any) -> Optional[Dict[str, Any]]:
@@ -1028,6 +1042,45 @@ async def get_world_graph(
         },
         stats=stats,
     )
+
+
+@router.get("/{project_id}/publish/summary", response_model=PublishSummaryResponse)
+async def get_publish_summary(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> PublishSummaryResponse:
+    export_service = ExportService(session)
+    summary = await export_service.get_publish_summary(project_id, current_user.id)
+    return PublishSummaryResponse(**summary)
+
+
+@router.get("/{project_id}/publish/export")
+async def export_project_publish(
+    project_id: str,
+    export_format: str = Query("markdown", alias="format"),
+    start_chapter: Optional[int] = Query(default=None, ge=1),
+    end_chapter: Optional[int] = Query(default=None, ge=1),
+    include_outline: bool = Query(default=True),
+    include_metadata: bool = Query(default=True),
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+):
+    export_service = ExportService(session)
+    result = await export_service.export_project(
+        project_id=project_id,
+        user_id=current_user.id,
+        export_format=export_format,
+        start_chapter=start_chapter,
+        end_chapter=end_chapter,
+        include_outline=include_outline,
+        include_metadata=include_metadata,
+    )
+    headers = {
+        "Content-Disposition": ExportService.build_content_disposition(result.filename),
+        "Cache-Control": "no-store",
+    }
+    return StreamingResponse(iter([result.content]), media_type=result.media_type, headers=headers)
 
 
 @router.get("/{project_id}/quality-dashboard")

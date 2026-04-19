@@ -103,6 +103,14 @@ class PipelineOrchestrator:
             chapters=project.chapters,
             user_id=user_id,
         )
+        recent_memory_pack = await self._build_recent_memory_pack(
+            completed_chapters=history_context["completed_chapters"],
+            chapter_number=chapter_number,
+        )
+        recent_retrieval_seed = await self._build_recent_retrieval_seed(
+            completed_chapters=history_context["completed_chapters"],
+            chapter_number=chapter_number,
+        )
 
         project_schema = await self.novel_service._serialize_project(project)
         blueprint_dict = self._normalize_blueprint(project_schema.blueprint.model_dump())
@@ -195,14 +203,17 @@ class PipelineOrchestrator:
                     writing_notes=writing_notes,
                     pov_character=self._resolve_pov_character(chapter_mission),
                     user_id=user_id,
+                    recent_retrieval_seed=recent_retrieval_seed,
                 )
             else:
                 rag_context = await self._get_rag_context(
                     project_id=project_id,
+                    chapter_number=chapter_number,
                     outline_title=outline_title,
                     outline_summary=outline_summary,
                     writing_notes=writing_notes,
                     user_id=user_id,
+                    recent_retrieval_seed=recent_retrieval_seed,
                 )
                 rag_stats = {
                     "mode": "simple",
@@ -262,6 +273,7 @@ class PipelineOrchestrator:
             forbidden_characters=forbidden_characters,
             project_memory_text=project_memory_text,
             memory_context=memory_context,
+            recent_memory_pack=recent_memory_pack,
             preset_style_rules_text=preset_style_rules_text,
         )
 
@@ -535,6 +547,147 @@ class PipelineOrchestrator:
 
         return int(settings.writer_chapter_versions)
 
+    async def _get_system_config_value(self, key: str) -> Optional[str]:
+        repo = SystemConfigRepository(self.session)
+        record = await repo.get_by_key(key)
+        if record and record.value not in (None, ""):
+            return str(record.value)
+        env_key = key.upper().replace(".", "_")
+        return os.getenv(env_key)
+
+    async def _get_int_system_config(
+        self,
+        key: str,
+        *,
+        default: int,
+        min_value: Optional[int] = None,
+        max_value: Optional[int] = None,
+    ) -> int:
+        raw = await self._get_system_config_value(key)
+        value = default
+        if raw not in (None, ""):
+            try:
+                value = int(str(raw).strip())
+            except Exception:
+                logger.warning("系统配置 %s 非法整数值：%s，回退默认值 %s", key, raw, default)
+                value = default
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
+    async def _get_float_system_config(
+        self,
+        key: str,
+        *,
+        default: float,
+        min_value: Optional[float] = None,
+        max_value: Optional[float] = None,
+    ) -> float:
+        raw = await self._get_system_config_value(key)
+        value = default
+        if raw not in (None, ""):
+            try:
+                value = float(str(raw).strip())
+            except Exception:
+                logger.warning("系统配置 %s 非法浮点值：%s，回退默认值 %.4f", key, raw, default)
+                value = default
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
+    async def _build_recent_memory_pack(
+        self,
+        *,
+        completed_chapters: List[Dict[str, Any]],
+        chapter_number: int,
+    ) -> Optional[str]:
+        if not completed_chapters:
+            return None
+
+        memory_limit = await self._get_int_system_config(
+            "rag.long_memory.recent_summary_count",
+            default=6,
+            min_value=1,
+            max_value=24,
+        )
+        max_item_chars = await self._get_int_system_config(
+            "rag.long_memory.recent_summary_chars",
+            default=260,
+            min_value=80,
+            max_value=1200,
+        )
+        picked = completed_chapters[-memory_limit:]
+        lines: List[str] = []
+        for item in picked:
+            number = int(item.get("chapter_number") or 0)
+            title = str(item.get("title") or f"第{number}章").strip() or f"第{number}章"
+            summary = str(item.get("summary") or "").strip()
+            if not summary:
+                continue
+            if len(summary) > max_item_chars:
+                summary = summary[: max_item_chars - 1] + "…"
+            lines.append(f"- 第{number}章《{title}》：{summary}")
+
+        if not lines:
+            return None
+        return (
+            f"当前准备创作第{chapter_number}章，请优先延续最近剧情脉络并保持因果连续：\n"
+            + "\n".join(lines)
+        )
+
+    async def _build_recent_retrieval_seed(
+        self,
+        *,
+        completed_chapters: List[Dict[str, Any]],
+        chapter_number: int,
+    ) -> Optional[str]:
+        if not completed_chapters:
+            return None
+        seed_limit = await self._get_int_system_config(
+            "rag.long_memory.retrieval_seed_count",
+            default=4,
+            min_value=1,
+            max_value=12,
+        )
+        picked = completed_chapters[-seed_limit:]
+        lines: List[str] = [f"检索补充线索（第{chapter_number}章写作前）:"]
+        for item in picked:
+            number = int(item.get("chapter_number") or 0)
+            title = str(item.get("title") or "").strip()
+            summary = str(item.get("summary") or "").strip()
+            if not title and not summary:
+                continue
+            summary_brief = summary[:120] + "…" if len(summary) > 120 else summary
+            lines.append(f"- 第{number}章 {title} {summary_brief}".strip())
+        if len(lines) <= 1:
+            return None
+        return "\n".join(lines)
+
+    @staticmethod
+    def _truncate_context_lines(lines: List[str], max_chars: int) -> List[str]:
+        if max_chars <= 0 or not lines:
+            return []
+        output: List[str] = []
+        total = 0
+        for line in lines:
+            text = str(line or "").strip()
+            if not text:
+                continue
+            length = len(text)
+            if total + length <= max_chars:
+                output.append(text)
+                total += length
+                continue
+            remain = max_chars - total
+            if remain > 60 and not output:
+                output.append(text[: remain - 1] + "…")
+            break
+        return output
+
     async def _collect_history_context(
         self,
         *,
@@ -670,10 +823,12 @@ class PipelineOrchestrator:
         self,
         *,
         project_id: str,
+        chapter_number: int,
         outline_title: str,
         outline_summary: str,
         writing_notes: str,
         user_id: int,
+        recent_retrieval_seed: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not settings.vector_store_enabled:
             return {"chunks": [], "summaries": []}
@@ -687,17 +842,54 @@ class PipelineOrchestrator:
         query_parts = [outline_title, outline_summary]
         if writing_notes:
             query_parts.append(writing_notes)
+        if recent_retrieval_seed:
+            query_parts.append(recent_retrieval_seed)
         rag_query = "\n".join(part for part in query_parts if part)
+
+        top_k_chunks = await self._get_int_system_config(
+            "rag.simple.top_k_chunks",
+            default=settings.vector_top_k_chunks,
+            min_value=0,
+            max_value=50,
+        )
+        top_k_summaries = await self._get_int_system_config(
+            "rag.simple.top_k_summaries",
+            default=settings.vector_top_k_summaries,
+            min_value=0,
+            max_value=50,
+        )
+        recency_weight = await self._get_float_system_config(
+            "rag.long_memory.recency_weight",
+            default=0.08,
+            min_value=0.0,
+            max_value=1.5,
+        )
+        max_context_chars = await self._get_int_system_config(
+            "rag.long_memory.max_context_chars",
+            default=9000,
+            min_value=1000,
+            max_value=48000,
+        )
 
         context_service = ChapterContextService(llm_service=self.llm_service, vector_store=vector_store)
         rag_context = await context_service.retrieve_for_generation(
             project_id=project_id,
             query_text=rag_query or outline_title or outline_summary,
             user_id=user_id,
+            top_k_chunks=top_k_chunks,
+            top_k_summaries=top_k_summaries,
+            target_chapter_number=chapter_number,
+            recency_weight=recency_weight,
         )
+        chunks = rag_context.chunk_texts() if rag_context.chunks else []
+        summaries = rag_context.summary_lines() if rag_context.summaries else []
+        chunk_budget = int(max_context_chars * 0.75)
+        summary_budget = max_context_chars - chunk_budget
+        chunks = self._truncate_context_lines(chunks, chunk_budget)
+        summaries = self._truncate_context_lines(summaries, summary_budget)
         return {
-            "chunks": rag_context.chunk_texts() if rag_context.chunks else [],
-            "summaries": rag_context.summary_lines() if rag_context.summaries else [],
+            "chunks": chunks,
+            "summaries": summaries,
         }
 
     async def _get_two_stage_rag_context(
@@ -708,6 +900,7 @@ class PipelineOrchestrator:
         writing_notes: str,
         pov_character: Optional[str],
         user_id: int,
+        recent_retrieval_seed: Optional[str] = None,
     ) -> Tuple[Optional[str], Dict[str, Any]]:
         if not settings.vector_store_enabled:
             return None, {"mode": "two_stage", "enabled": False}
@@ -720,13 +913,23 @@ class PipelineOrchestrator:
 
         sync_session = getattr(self.session, "sync_session", self.session)
         retrieval_service = KnowledgeRetrievalService(sync_session, self.llm_service, vector_store)
+        two_stage_top_k = await self._get_int_system_config(
+            "rag.two_stage.top_k",
+            default=settings.vector_top_k_chunks,
+            min_value=1,
+            max_value=50,
+        )
+        guidance_parts = [writing_notes.strip()] if writing_notes and writing_notes.strip() else []
+        if recent_retrieval_seed:
+            guidance_parts.append(recent_retrieval_seed)
+        merged_guidance = "\n".join(guidance_parts) if guidance_parts else None
         filtered = await retrieval_service.retrieve_and_filter(
             project_id=project_id,
             chapter_number=chapter_number,
             user_id=user_id,
             pov_character=pov_character,
-            user_guidance=writing_notes,
-            top_k=settings.vector_top_k_chunks,
+            user_guidance=merged_guidance,
+            top_k=two_stage_top_k,
         )
         context_text = self._format_filtered_context(filtered)
         stats = filtered.stats or {}
@@ -878,6 +1081,7 @@ class PipelineOrchestrator:
         forbidden_characters: List[str],
         project_memory_text: Optional[str],
         memory_context: Optional[str],
+        recent_memory_pack: Optional[str],
         preset_style_rules_text: Optional[str],
     ) -> List[Tuple[str, str]]:
         blueprint_text = json.dumps(writer_blueprint, ensure_ascii=False, indent=2)
@@ -897,6 +1101,7 @@ class PipelineOrchestrator:
             [
                 ("[上一章摘要]", previous_summary or "暂无（这是第一章）"),
                 ("[上一章结尾]", previous_tail or "暂无（这是第一章）"),
+                ("[长篇记忆库](最近章节脉络)", recent_memory_pack or ""),
                 ("[章节导演脚本](JSON)", mission_text),
             ]
         )

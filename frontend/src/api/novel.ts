@@ -76,6 +76,23 @@ const parseResponsePayload = async <T>(response: Response): Promise<T> => {
   }
 }
 
+const parseDownloadFilename = (contentDisposition: string | null, fallback: string): string => {
+  if (!contentDisposition) return fallback
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1])
+    } catch {
+      return utf8Match[1]
+    }
+  }
+  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
+  if (plainMatch?.[1]) {
+    return plainMatch[1]
+  }
+  return fallback
+}
+
 // 统一的请求处理函数
 const request = async <T = any>(url: string, options: RequestOptions = {}): Promise<T> => {
   const authStore = useAuthStore()
@@ -369,6 +386,7 @@ export type AnalysisSectionType =
   | 'timeline'
   | 'terminology'
   | 'quality_dashboard'
+  | 'publish_center'
 
 // 所有Section的联合类型
 export type AllSectionType = NovelSectionType | AnalysisSectionType
@@ -416,6 +434,20 @@ export interface FactionRelationshipItem {
   strength?: number | null
   description?: string | null
   reason?: string | null
+}
+
+export type PublishFormat = 'markdown' | 'txt' | 'docx' | 'epub'
+
+export interface PublishSummaryResponse {
+  project_id: string
+  title: string
+  chapter_total: number
+  outline_total: number
+  generated_chapter_total: number
+  first_chapter_number?: number | null
+  last_chapter_number?: number | null
+  latest_generated_chapter?: number | null
+  generated_at: string
 }
 
 export interface WritingPresetItem {
@@ -710,6 +742,63 @@ export class NovelAPI {
 
   static async getProjectQualityDashboard(projectId: string): Promise<ProjectQualityDashboard> {
     return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/quality-dashboard`)
+  }
+
+  static async getPublishSummary(projectId: string): Promise<PublishSummaryResponse> {
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/publish/summary`)
+  }
+
+  static async downloadPublishExport(
+    projectId: string,
+    query: {
+      format: PublishFormat
+      start_chapter?: number
+      end_chapter?: number
+      include_outline?: boolean
+      include_metadata?: boolean
+    }
+  ): Promise<void> {
+    const params = new URLSearchParams()
+    params.set('format', query.format)
+    if (query.start_chapter != null) params.set('start_chapter', String(query.start_chapter))
+    if (query.end_chapter != null) params.set('end_chapter', String(query.end_chapter))
+    if (query.include_outline != null) params.set('include_outline', String(query.include_outline))
+    if (query.include_metadata != null) params.set('include_metadata', String(query.include_metadata))
+
+    const authStore = useAuthStore()
+    const headers = new Headers()
+    if (authStore.isAuthenticated && authStore.token) {
+      headers.set('Authorization', `Bearer ${authStore.token}`)
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}${API_PREFIX}/projects/${projectId}/publish/export?${params.toString()}`,
+      {
+        method: 'GET',
+        headers
+      }
+    )
+    if (response.status === 401) {
+      authStore.logout()
+      router.push('/login')
+      throw new Error('会话已过期，请重新登录')
+    }
+    if (!response.ok) {
+      const detail = await extractErrorMessage(response)
+      throw new Error(normalizeErrorMessage(response.status, detail))
+    }
+
+    const blob = await response.blob()
+    const fallbackName = `novel_export_${Date.now()}.${query.format === 'markdown' ? 'md' : query.format}`
+    const filename = parseDownloadFilename(response.headers.get('content-disposition'), fallbackName)
+    const href = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = href
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(href)
   }
 
   static async saveProjectTimeline(

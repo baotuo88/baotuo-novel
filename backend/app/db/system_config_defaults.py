@@ -54,6 +54,21 @@ SYSTEM_CONFIG_DEFAULTS: list[SystemConfigDefault] = [
         description="主模型失败后可自动回退的模型列表（逗号分隔）。",
     ),
     SystemConfigDefault(
+        key="llm.route.backends",
+        value_getter=lambda _config: "",
+        description="后端容灾路由列表（逗号分隔），例如 backup1,backup2；对应 llm.route.{name}.* 配置。",
+    ),
+    SystemConfigDefault(
+        key="llm.route.retry_on_any_error",
+        value_getter=lambda _config: "false",
+        description="是否在非可重试错误时也切换到下一个后端路由。",
+    ),
+    SystemConfigDefault(
+        key="llm.route.enable_for_custom_key",
+        value_getter=lambda _config: "false",
+        description="用户配置了自定义 API Key 时，是否仍启用系统后端路由链。",
+    ),
+    SystemConfigDefault(
         key="llm.budget.daily_usd.global",
         value_getter=lambda _config: "0",
         description="全局每日预算（USD），0 表示关闭。",
@@ -267,5 +282,45 @@ SYSTEM_CONFIG_DEFAULTS: list[SystemConfigDefault] = [
         key="ollama.embedding_model",
         value_getter=lambda config: config.ollama_embedding_model,
         description="Ollama 嵌入模型名称。",
+    ),
+    SystemConfigDefault(
+        key="rag.simple.top_k_chunks",
+        value_getter=lambda config: _to_optional_str(config.vector_top_k_chunks),
+        description="Simple RAG 模式检索剧情片段数量。",
+    ),
+    SystemConfigDefault(
+        key="rag.simple.top_k_summaries",
+        value_getter=lambda config: _to_optional_str(config.vector_top_k_summaries),
+        description="Simple RAG 模式检索章节摘要数量。",
+    ),
+    SystemConfigDefault(
+        key="rag.two_stage.top_k",
+        value_getter=lambda config: _to_optional_str(config.vector_top_k_chunks),
+        description="Two-stage RAG 模式每次检索 TopK。",
+    ),
+    SystemConfigDefault(
+        key="rag.long_memory.recent_summary_count",
+        value_getter=lambda _config: "6",
+        description="长篇记忆库注入的最近章节摘要数量。",
+    ),
+    SystemConfigDefault(
+        key="rag.long_memory.recent_summary_chars",
+        value_getter=lambda _config: "260",
+        description="长篇记忆库中单章节摘要截断长度。",
+    ),
+    SystemConfigDefault(
+        key="rag.long_memory.retrieval_seed_count",
+        value_getter=lambda _config: "4",
+        description="用于补充检索关键词的最近章节数量。",
+    ),
+    SystemConfigDefault(
+        key="rag.long_memory.recency_weight",
+        value_getter=lambda _config: "0.08",
+        description="RAG 结果重排的章节邻近权重，越大越偏向最近章节。",
+    ),
+    SystemConfigDefault(
+        key="rag.long_memory.max_context_chars",
+        value_getter=lambda _config: "9000",
+        description="RAG 注入 Prompt 的最大总字符预算。",
     ),
 ]

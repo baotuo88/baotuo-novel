@@ -57,6 +57,17 @@ class StreamErrorInfo:
     retryable: bool
     error_type: str
 
+
+@dataclass
+class LLMRouteConfig:
+    name: str
+    api_key: str
+    base_url: Optional[str]
+    model: Optional[str]
+    use_system_key: bool
+    subscription_plan: Optional[str]
+    fallback_models: List[str]
+
 try:  # pragma: no cover - 运行环境未安装时兼容
     from ollama import AsyncClient as OllamaAsyncClient
 except ImportError:  # pragma: no cover - Ollama 为可选依赖
@@ -186,7 +197,7 @@ class LLMService:
         provider = "openai-compatible"
 
         try:
-            config = await self._resolve_llm_config(user_id)
+            base_config = await self._resolve_llm_config(user_id)
         except HTTPException as exc:
             await self._record_llm_call(
                 user_id=user_id,
@@ -207,245 +218,328 @@ class LLMService:
             )
             raise
 
-        model_name = (config.get("model") or "").strip()
-        provider = self._infer_provider(config.get("base_url"))
-        use_system_key = config.get("_uses_system_key") is True
-        subscription_plan = (config.get("_subscription_plan") or "").strip() or None
-        try:
-            model_name, budget_note = await self._apply_budget_policy(
-                model=model_name,
-                user_id=user_id,
-                project_id=project_id,
-                input_tokens=input_tokens,
-                use_system_key=use_system_key,
-                subscription_plan=subscription_plan,
-            )
-        except HTTPException as exc:
-            await self._record_llm_call(
-                user_id=user_id,
-                project_id=project_id,
-                request_type=request_type,
-                provider=provider,
-                model=model_name,
-                status="error",
-                latency_ms=self._elapsed_ms(start_at),
-                input_chars=input_chars,
-                output_chars=0,
-                estimated_input_tokens=input_tokens,
-                estimated_output_tokens=0,
-                finish_reason=None,
-                error_type="BudgetCircuitOpen",
-                error_message=str(exc.detail),
-                commit=True,
-            )
-            raise
-
-        if budget_note:
-            logger.warning("LLM 预算熔断触发并降级模型：%s", budget_note)
-
-        client = LLMClient(api_key=config["api_key"], base_url=config.get("base_url"))
         chat_messages = [ChatMessage(role=msg["role"], content=msg["content"]) for msg in messages]
+        route_chain = await self._resolve_llm_route_chain(base_config)
+        if route_chain:
+            model_name = (route_chain[0].model or "").strip()
+            provider = self._infer_provider(route_chain[0].base_url)
 
         if max_retries_override is None:
             max_retries = await self._get_int_config("llm.retry.max_retries", default=1, min_value=0, max_value=4)
         else:
             max_retries = max(0, min(4, int(max_retries_override)))
         backoff_ms = await self._get_int_config("llm.retry.backoff_ms", default=600, min_value=100, max_value=10_000)
-        model_candidates = await self._get_model_candidates(model_name)
-        if not allow_fallback_models and model_candidates:
-            model_candidates = model_candidates[:1]
-        budget_filtered_candidates: List[str] = []
-        budget_block_detail: Optional[str] = None
-        for candidate in model_candidates:
-            try:
-                checked_model, _ = await self._apply_budget_policy(
-                    model=candidate,
-                    user_id=user_id,
-                    project_id=project_id,
-                    input_tokens=input_tokens,
-                    allow_degrade=False,
-                    use_system_key=use_system_key,
-                    subscription_plan=subscription_plan,
-                )
-                if checked_model not in budget_filtered_candidates:
-                    budget_filtered_candidates.append(checked_model)
-            except HTTPException as exc:
-                budget_block_detail = budget_block_detail or str(exc.detail)
-                logger.warning(
-                    "模型已因预算熔断被跳过：model=%s user_id=%s project_id=%s detail=%s",
-                    candidate,
-                    user_id,
-                    project_id,
-                    exc.detail,
-                )
-
-        if not budget_filtered_candidates:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=budget_block_detail or "LLM 预算熔断已触发，请稍后再试或调整预算配置",
-            )
-        model_candidates = budget_filtered_candidates
+        retry_on_any_route_error = await self._get_bool_config(
+            "llm.route.retry_on_any_error",
+            default=False,
+        )
         last_error: Optional[StreamErrorInfo] = None
         attempt_index = 0
 
         logger.info(
-            "Streaming LLM response: model=%s user_id=%s project_id=%s messages=%d retries=%d candidates=%s",
-            model_name,
+            "Streaming LLM response: model=%s user_id=%s project_id=%s messages=%d retries=%d routes=%s",
+            model_name or "",
             user_id,
             project_id,
             len(messages),
             max_retries,
-            model_candidates,
+            [route.name for route in route_chain],
         )
 
-        for candidate_i, candidate_model in enumerate(model_candidates):
-            per_model_attempts = max_retries + 1 if candidate_i == 0 else 1
+        for route_i, route in enumerate(route_chain):
+            route_provider = self._infer_provider(route.base_url)
+            route_model = (route.model or "").strip()
+            route_last_error: Optional[StreamErrorInfo] = None
+            route_budget_note: Optional[str] = None
 
-            for retry_i in range(per_model_attempts):
-                attempt_index += 1
-                full_response = ""
-                finish_reason = None
-
-                try:
-                    async for part in client.stream_chat(
-                        messages=chat_messages,
-                        model=candidate_model,
-                        temperature=temperature,
-                        timeout=int(timeout),
-                        response_format=response_format,
-                        max_tokens=max_tokens,
-                        top_p=top_p,
-                    ):
-                        if part.get("content"):
-                            full_response += part["content"]
-                        if part.get("finish_reason"):
-                            finish_reason = part["finish_reason"]
-                except Exception as exc:
-                    error_info = self._classify_stream_error(exc)
-                    last_error = error_info
-                    logger.error(
-                        "LLM stream failed: model=%s user_id=%s project_id=%s attempt=%s detail=%s",
-                        candidate_model,
-                        user_id,
-                        project_id,
-                        attempt_index,
-                        error_info.detail,
-                        exc_info=exc,
-                    )
-                    await self._record_llm_call(
-                        user_id=user_id,
-                        project_id=project_id,
-                        request_type=request_type,
-                        provider=provider,
-                        model=candidate_model,
-                        status="error",
-                        latency_ms=self._elapsed_ms(start_at),
-                        input_chars=input_chars,
-                        output_chars=len(full_response),
-                        estimated_input_tokens=input_tokens,
-                        estimated_output_tokens=self._estimate_tokens_by_chars(len(full_response)),
-                        finish_reason=finish_reason,
-                        error_type=error_info.error_type,
-                        error_message=error_info.detail,
-                        commit=True,
-                    )
-                    if error_info.retryable and retry_i < per_model_attempts - 1:
-                        await asyncio.sleep((backoff_ms * (2 ** retry_i)) / 1000)
-                        continue
-                    break
-
-                logger.debug(
-                    "LLM response collected: model=%s user_id=%s project_id=%s finish_reason=%s preview=%s",
-                    candidate_model,
-                    user_id,
-                    project_id,
-                    finish_reason,
-                    full_response[:500],
+            try:
+                route_model, route_budget_note = await self._apply_budget_policy(
+                    model=route_model,
+                    user_id=user_id,
+                    project_id=project_id,
+                    input_tokens=input_tokens,
+                    use_system_key=route.use_system_key,
+                    subscription_plan=route.subscription_plan,
                 )
-
-                if finish_reason == "length":
-                    detail = f"AI 响应因长度限制被截断（已生成 {len(full_response)} 字符），请缩短输入内容或调整模型参数"
-                    last_error = StreamErrorInfo(
-                        status_code=500,
-                        detail=detail,
-                        retryable=False,
-                        error_type="LengthTruncated",
-                    )
-                    await self._record_llm_call(
-                        user_id=user_id,
-                        project_id=project_id,
-                        request_type=request_type,
-                        provider=provider,
-                        model=candidate_model,
-                        status="error",
-                        latency_ms=self._elapsed_ms(start_at),
-                        input_chars=input_chars,
-                        output_chars=len(full_response),
-                        estimated_input_tokens=input_tokens,
-                        estimated_output_tokens=self._estimate_tokens_by_chars(len(full_response)),
-                        finish_reason=finish_reason,
-                        error_type=last_error.error_type,
-                        error_message=detail,
-                        commit=True,
-                    )
-                    break
-
-                if not full_response:
-                    detail = f"AI 未返回有效内容（结束原因: {finish_reason or '未知'}），请稍后重试或联系管理员"
-                    last_error = StreamErrorInfo(
-                        status_code=500,
-                        detail=detail,
-                        retryable=False,
-                        error_type="EmptyResponse",
-                    )
-                    await self._record_llm_call(
-                        user_id=user_id,
-                        project_id=project_id,
-                        request_type=request_type,
-                        provider=provider,
-                        model=candidate_model,
-                        status="error",
-                        latency_ms=self._elapsed_ms(start_at),
-                        input_chars=input_chars,
-                        output_chars=0,
-                        estimated_input_tokens=input_tokens,
-                        estimated_output_tokens=0,
-                        finish_reason=finish_reason,
-                        error_type=last_error.error_type,
-                        error_message=detail,
-                        commit=True,
-                    )
-                    break
-
-                output_chars = len(full_response)
-                output_tokens = self._estimate_tokens_by_chars(output_chars)
+            except HTTPException as exc:
+                route_last_error = StreamErrorInfo(
+                    status_code=exc.status_code,
+                    detail=str(exc.detail),
+                    retryable=False,
+                    error_type="BudgetCircuitOpen",
+                )
+                last_error = route_last_error
                 await self._record_llm_call(
                     user_id=user_id,
                     project_id=project_id,
                     request_type=request_type,
-                    provider=provider,
-                    model=candidate_model,
-                    status="success",
+                    provider=route_provider,
+                    model=route_model,
+                    status="error",
                     latency_ms=self._elapsed_ms(start_at),
                     input_chars=input_chars,
-                    output_chars=output_chars,
+                    output_chars=0,
                     estimated_input_tokens=input_tokens,
-                    estimated_output_tokens=output_tokens,
-                    finish_reason=finish_reason,
-                    error_type=None,
-                    error_message=None,
-                    commit=False,
+                    estimated_output_tokens=0,
+                    finish_reason=None,
+                    error_type=route_last_error.error_type,
+                    error_message=route_last_error.detail,
+                    commit=True,
                 )
-                await self.usage_service.increment("api_request_count")
-                logger.info(
-                    "LLM response success: model=%s user_id=%s project_id=%s chars=%d attempt=%d",
-                    candidate_model,
-                    user_id,
-                    project_id,
-                    output_chars,
-                    attempt_index,
+                break
+
+            if route_budget_note:
+                logger.warning("LLM 预算熔断触发并降级模型：route=%s %s", route.name, route_budget_note)
+
+            try:
+                client = LLMClient(api_key=route.api_key, base_url=route.base_url)
+            except Exception as exc:
+                route_last_error = self._classify_stream_error(exc)
+                last_error = route_last_error
+                await self._record_llm_call(
+                    user_id=user_id,
+                    project_id=project_id,
+                    request_type=request_type,
+                    provider=route_provider,
+                    model=route_model,
+                    status="error",
+                    latency_ms=self._elapsed_ms(start_at),
+                    input_chars=input_chars,
+                    output_chars=0,
+                    estimated_input_tokens=input_tokens,
+                    estimated_output_tokens=0,
+                    finish_reason=None,
+                    error_type=route_last_error.error_type,
+                    error_message=route_last_error.detail,
+                    commit=True,
                 )
-                return full_response
+                if route_i < len(route_chain) - 1 and (route_last_error.retryable or retry_on_any_route_error):
+                    logger.warning(
+                        "LLM 路由初始化失败，切换下一个后端：route=%s detail=%s",
+                        route.name,
+                        route_last_error.detail,
+                    )
+                    continue
+                break
+
+            model_candidates = await self._get_model_candidates(route_model, route.fallback_models)
+            if not allow_fallback_models and model_candidates:
+                model_candidates = model_candidates[:1]
+            budget_filtered_candidates: List[str] = []
+            budget_block_detail: Optional[str] = None
+            for candidate in model_candidates:
+                try:
+                    checked_model, _ = await self._apply_budget_policy(
+                        model=candidate,
+                        user_id=user_id,
+                        project_id=project_id,
+                        input_tokens=input_tokens,
+                        allow_degrade=False,
+                        use_system_key=route.use_system_key,
+                        subscription_plan=route.subscription_plan,
+                    )
+                    if checked_model not in budget_filtered_candidates:
+                        budget_filtered_candidates.append(checked_model)
+                except HTTPException as exc:
+                    budget_block_detail = budget_block_detail or str(exc.detail)
+                    logger.warning(
+                        "模型已因预算熔断被跳过：route=%s model=%s user_id=%s project_id=%s detail=%s",
+                        route.name,
+                        candidate,
+                        user_id,
+                        project_id,
+                        exc.detail,
+                    )
+
+            if not budget_filtered_candidates:
+                route_last_error = StreamErrorInfo(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=budget_block_detail or "LLM 预算熔断已触发，请稍后再试或调整预算配置",
+                    retryable=False,
+                    error_type="BudgetCircuitOpen",
+                )
+                last_error = route_last_error
+                break
+
+            logger.info(
+                "Streaming route ready: route=%s provider=%s model=%s candidates=%s",
+                route.name,
+                route_provider,
+                route_model,
+                budget_filtered_candidates,
+            )
+
+            for candidate_i, candidate_model in enumerate(budget_filtered_candidates):
+                if route_i == 0:
+                    per_model_attempts = max_retries + 1 if candidate_i == 0 else 1
+                else:
+                    per_model_attempts = 1
+
+                for retry_i in range(per_model_attempts):
+                    attempt_index += 1
+                    full_response = ""
+                    finish_reason = None
+
+                    try:
+                        async for part in client.stream_chat(
+                            messages=chat_messages,
+                            model=candidate_model,
+                            temperature=temperature,
+                            timeout=int(timeout),
+                            response_format=response_format,
+                            max_tokens=max_tokens,
+                            top_p=top_p,
+                        ):
+                            if part.get("content"):
+                                full_response += part["content"]
+                            if part.get("finish_reason"):
+                                finish_reason = part["finish_reason"]
+                    except Exception as exc:
+                        error_info = self._classify_stream_error(exc)
+                        route_last_error = error_info
+                        last_error = error_info
+                        logger.error(
+                            "LLM stream failed: route=%s model=%s user_id=%s project_id=%s attempt=%s detail=%s",
+                            route.name,
+                            candidate_model,
+                            user_id,
+                            project_id,
+                            attempt_index,
+                            error_info.detail,
+                            exc_info=exc,
+                        )
+                        await self._record_llm_call(
+                            user_id=user_id,
+                            project_id=project_id,
+                            request_type=request_type,
+                            provider=route_provider,
+                            model=candidate_model,
+                            status="error",
+                            latency_ms=self._elapsed_ms(start_at),
+                            input_chars=input_chars,
+                            output_chars=len(full_response),
+                            estimated_input_tokens=input_tokens,
+                            estimated_output_tokens=self._estimate_tokens_by_chars(len(full_response)),
+                            finish_reason=finish_reason,
+                            error_type=error_info.error_type,
+                            error_message=error_info.detail,
+                            commit=True,
+                        )
+                        if error_info.retryable and retry_i < per_model_attempts - 1:
+                            await asyncio.sleep((backoff_ms * (2 ** retry_i)) / 1000)
+                            continue
+                        break
+
+                    logger.debug(
+                        "LLM response collected: route=%s model=%s user_id=%s project_id=%s finish_reason=%s preview=%s",
+                        route.name,
+                        candidate_model,
+                        user_id,
+                        project_id,
+                        finish_reason,
+                        full_response[:500],
+                    )
+
+                    if finish_reason == "length":
+                        detail = f"AI 响应因长度限制被截断（已生成 {len(full_response)} 字符），请缩短输入内容或调整模型参数"
+                        route_last_error = StreamErrorInfo(
+                            status_code=500,
+                            detail=detail,
+                            retryable=False,
+                            error_type="LengthTruncated",
+                        )
+                        last_error = route_last_error
+                        await self._record_llm_call(
+                            user_id=user_id,
+                            project_id=project_id,
+                            request_type=request_type,
+                            provider=route_provider,
+                            model=candidate_model,
+                            status="error",
+                            latency_ms=self._elapsed_ms(start_at),
+                            input_chars=input_chars,
+                            output_chars=len(full_response),
+                            estimated_input_tokens=input_tokens,
+                            estimated_output_tokens=self._estimate_tokens_by_chars(len(full_response)),
+                            finish_reason=finish_reason,
+                            error_type=route_last_error.error_type,
+                            error_message=detail,
+                            commit=True,
+                        )
+                        break
+
+                    if not full_response:
+                        detail = f"AI 未返回有效内容（结束原因: {finish_reason or '未知'}），请稍后重试或联系管理员"
+                        route_last_error = StreamErrorInfo(
+                            status_code=500,
+                            detail=detail,
+                            retryable=False,
+                            error_type="EmptyResponse",
+                        )
+                        last_error = route_last_error
+                        await self._record_llm_call(
+                            user_id=user_id,
+                            project_id=project_id,
+                            request_type=request_type,
+                            provider=route_provider,
+                            model=candidate_model,
+                            status="error",
+                            latency_ms=self._elapsed_ms(start_at),
+                            input_chars=input_chars,
+                            output_chars=0,
+                            estimated_input_tokens=input_tokens,
+                            estimated_output_tokens=0,
+                            finish_reason=finish_reason,
+                            error_type=route_last_error.error_type,
+                            error_message=detail,
+                            commit=True,
+                        )
+                        break
+
+                    output_chars = len(full_response)
+                    output_tokens = self._estimate_tokens_by_chars(output_chars)
+                    await self._record_llm_call(
+                        user_id=user_id,
+                        project_id=project_id,
+                        request_type=request_type,
+                        provider=route_provider,
+                        model=candidate_model,
+                        status="success",
+                        latency_ms=self._elapsed_ms(start_at),
+                        input_chars=input_chars,
+                        output_chars=output_chars,
+                        estimated_input_tokens=input_tokens,
+                        estimated_output_tokens=output_tokens,
+                        finish_reason=finish_reason,
+                        error_type=None,
+                        error_message=None,
+                        commit=False,
+                    )
+                    await self.usage_service.increment("api_request_count")
+                    logger.info(
+                        "LLM response success: route=%s model=%s user_id=%s project_id=%s chars=%d attempt=%d",
+                        route.name,
+                        candidate_model,
+                        user_id,
+                        project_id,
+                        output_chars,
+                        attempt_index,
+                    )
+                    return full_response
+
+            if route_last_error and route_i < len(route_chain) - 1 and (
+                route_last_error.retryable or retry_on_any_route_error
+            ):
+                logger.warning(
+                    "LLM 路由降级切换：from=%s to=%s reason=%s",
+                    route.name,
+                    route_chain[route_i + 1].name,
+                    route_last_error.detail,
+                )
+                continue
+
+            if route_last_error:
+                break
 
         if last_error:
             raise HTTPException(status_code=last_error.status_code, detail=last_error.detail)
@@ -525,10 +619,16 @@ class LLMService:
             error_type=exc.__class__.__name__,
         )
 
-    async def _get_model_candidates(self, primary_model: Optional[str]) -> List[str]:
+    async def _get_model_candidates(
+        self,
+        primary_model: Optional[str],
+        route_fallback_models: Optional[List[str]] = None,
+    ) -> List[str]:
         models: List[str] = []
         if primary_model:
             models.append(primary_model.strip())
+        if route_fallback_models:
+            models.extend(item.strip() for item in route_fallback_models if str(item).strip())
         fallback_text = await self._get_config_value("llm.fallback.models")
         if fallback_text:
             models.extend(item.strip() for item in fallback_text.split(",") if item.strip())
@@ -595,6 +695,91 @@ class LLMService:
         if max_value is not None:
             value = min(max_value, value)
         return value
+
+    async def _get_bool_config(self, key: str, *, default: bool = False) -> bool:
+        raw = await self._get_config_value(key)
+        if raw in (None, ""):
+            return default
+        normalized = str(raw).strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        logger.warning("系统配置 %s 非法布尔值：%s，已回退默认值 %s", key, raw, default)
+        return default
+
+    async def _resolve_llm_route_chain(self, base_config: Dict[str, Any]) -> List[LLMRouteConfig]:
+        primary_route = LLMRouteConfig(
+            name="primary",
+            api_key=str(base_config.get("api_key") or "").strip(),
+            base_url=base_config.get("base_url"),
+            model=base_config.get("model"),
+            use_system_key=base_config.get("_uses_system_key") is True,
+            subscription_plan=(base_config.get("_subscription_plan") or "").strip() or None,
+            fallback_models=[],
+        )
+        routes: List[LLMRouteConfig] = [primary_route]
+
+        allow_for_custom_key = await self._get_bool_config(
+            "llm.route.enable_for_custom_key",
+            default=False,
+        )
+        if not primary_route.use_system_key and not allow_for_custom_key:
+            return routes
+
+        backend_text = await self._get_config_value("llm.route.backends")
+        if not backend_text:
+            return routes
+
+        for name in self._parse_csv_list(backend_text):
+            key_prefix = f"llm.route.{name}"
+            api_key = (await self._get_config_value(f"{key_prefix}.api_key") or "").strip()
+            if not api_key:
+                logger.warning("路由后端缺少 api_key，已跳过：%s", key_prefix)
+                continue
+            base_url = await self._get_config_value(f"{key_prefix}.base_url")
+            model = await self._get_config_value(f"{key_prefix}.model")
+            fallback_models = self._parse_csv_list(await self._get_config_value(f"{key_prefix}.fallback_models"))
+            routes.append(
+                LLMRouteConfig(
+                    name=name,
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model or primary_route.model,
+                    use_system_key=primary_route.use_system_key,
+                    subscription_plan=primary_route.subscription_plan,
+                    fallback_models=fallback_models,
+                )
+            )
+
+        deduped: List[LLMRouteConfig] = []
+        seen = set()
+        for route in routes:
+            key = (
+                route.api_key,
+                (route.base_url or "").strip().lower(),
+                (route.model or "").strip().lower(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(route)
+        return deduped
+
+    @staticmethod
+    def _parse_csv_list(raw: Optional[str]) -> List[str]:
+        if raw in (None, ""):
+            return []
+        result: List[str] = []
+        seen = set()
+        for item in str(raw).split(","):
+            normalized = item.strip()
+            lowered = normalized.lower()
+            if not normalized or lowered in seen:
+                continue
+            seen.add(lowered)
+            result.append(normalized)
+        return result
 
     async def _load_budget_policy(
         self,

@@ -66,6 +66,8 @@ class ChapterContextService:
         user_id: int,
         top_k_chunks: Optional[int] = None,
         top_k_summaries: Optional[int] = None,
+        target_chapter_number: Optional[int] = None,
+        recency_weight: float = 0.0,
     ) -> ChapterRAGContext:
         """根据章节摘要构造检索向量，并返回 RAG 上下文。"""
         query = self._normalize(query_text)
@@ -89,6 +91,19 @@ class ChapterContextService:
             embedding=embedding,
             top_k=top_k_summaries,
         )
+        if target_chapter_number is not None and recency_weight > 0:
+            chunks.sort(
+                key=lambda item: (
+                    float(item.score) + abs(int(item.chapter_number) - int(target_chapter_number)) * recency_weight,
+                    -int(item.chapter_number),
+                )
+            )
+            summaries.sort(
+                key=lambda item: (
+                    float(item.score) + abs(int(item.chapter_number) - int(target_chapter_number)) * recency_weight,
+                    -int(item.chapter_number),
+                )
+            )
         logger.info(
             "章节上下文检索完成: project=%s chunks=%d summaries=%d query_preview=%s",
             project_id,
