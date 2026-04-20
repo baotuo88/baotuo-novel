@@ -6,7 +6,7 @@ import logging
 from typing import Iterable, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.generation_task import GenerationTask
@@ -82,29 +82,6 @@ class GenerationSubmitPolicyService:
             )
         return GenerationSubmitPolicy(**values)
 
-    async def _count_tasks(
-        self,
-        *,
-        statuses: Iterable[str],
-        user_id: Optional[int] = None,
-        project_id: Optional[str] = None,
-        task_type: Optional[str] = None,
-        exclude_task_ids: Optional[Iterable[str]] = None,
-    ) -> int:
-        stmt = select(func.count(GenerationTask.id)).where(GenerationTask.status.in_(list(statuses)))
-        if user_id is not None:
-            stmt = stmt.where(GenerationTask.user_id == int(user_id))
-        if project_id is not None:
-            stmt = stmt.where(GenerationTask.project_id == str(project_id))
-        if task_type:
-            stmt = stmt.where(GenerationTask.task_type == task_type)
-
-        excluded = [str(item) for item in (exclude_task_ids or []) if str(item).strip()]
-        if excluded:
-            stmt = stmt.where(~GenerationTask.id.in_(excluded))
-
-        return int(await self.session.scalar(stmt) or 0)
-
     async def inspect_snapshot(
         self,
         *,
@@ -112,45 +89,92 @@ class GenerationSubmitPolicyService:
         project_id: str,
         exclude_task_ids: Optional[Iterable[str]] = None,
     ) -> GenerationSubmitSnapshot:
-        running_user = await self._count_tasks(
-            statuses=[TASK_STATUS_RUNNING],
-            user_id=user_id,
-            exclude_task_ids=exclude_task_ids,
-        )
-        running_project = await self._count_tasks(
-            statuses=[TASK_STATUS_RUNNING],
-            project_id=project_id,
-            exclude_task_ids=exclude_task_ids,
-        )
-        queued_user = await self._count_tasks(
-            statuses=[TASK_STATUS_QUEUED],
-            user_id=user_id,
-            exclude_task_ids=exclude_task_ids,
-        )
-        queued_project = await self._count_tasks(
-            statuses=[TASK_STATUS_QUEUED],
-            project_id=project_id,
-            exclude_task_ids=exclude_task_ids,
-        )
-        running_blueprint_user = await self._count_tasks(
-            statuses=[TASK_STATUS_RUNNING],
-            user_id=user_id,
-            task_type=TASK_TYPE_BLUEPRINT_GENERATION,
-            exclude_task_ids=exclude_task_ids,
-        )
-        running_chapter_project = await self._count_tasks(
-            statuses=[TASK_STATUS_RUNNING],
-            project_id=project_id,
-            task_type=TASK_TYPE_CHAPTER_GENERATION,
-            exclude_task_ids=exclude_task_ids,
-        )
+        excluded = [str(item) for item in (exclude_task_ids or []) if str(item).strip()]
+        base_filters = [GenerationTask.status.in_([TASK_STATUS_RUNNING, TASK_STATUS_QUEUED])]
+        if excluded:
+            base_filters.append(~GenerationTask.id.in_(excluded))
+
+        stmt = select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (and_(GenerationTask.status == TASK_STATUS_RUNNING, GenerationTask.user_id == int(user_id)), 1),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("running_user"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(GenerationTask.status == TASK_STATUS_RUNNING, GenerationTask.project_id == str(project_id)),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("running_project"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (and_(GenerationTask.status == TASK_STATUS_QUEUED, GenerationTask.user_id == int(user_id)), 1),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("queued_user"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (and_(GenerationTask.status == TASK_STATUS_QUEUED, GenerationTask.project_id == str(project_id)), 1),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("queued_project"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                GenerationTask.status == TASK_STATUS_RUNNING,
+                                GenerationTask.user_id == int(user_id),
+                                GenerationTask.task_type == TASK_TYPE_BLUEPRINT_GENERATION,
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("running_blueprint_user"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                GenerationTask.status == TASK_STATUS_RUNNING,
+                                GenerationTask.project_id == str(project_id),
+                                GenerationTask.task_type == TASK_TYPE_CHAPTER_GENERATION,
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("running_chapter_project"),
+        ).where(*base_filters)
+        result = (await self.session.execute(stmt)).one()
         return GenerationSubmitSnapshot(
-            running_user=running_user,
-            running_project=running_project,
-            queued_user=queued_user,
-            queued_project=queued_project,
-            running_blueprint_user=running_blueprint_user,
-            running_chapter_project=running_chapter_project,
+            running_user=int(result.running_user or 0),
+            running_project=int(result.running_project or 0),
+            queued_user=int(result.queued_user or 0),
+            queued_project=int(result.queued_project or 0),
+            running_blueprint_user=int(result.running_blueprint_user or 0),
+            running_chapter_project=int(result.running_chapter_project or 0),
         )
 
     async def ensure_submit_allowed(

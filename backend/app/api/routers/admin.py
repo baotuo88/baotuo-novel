@@ -3,12 +3,15 @@ import asyncio
 import logging
 import csv
 import io
+import ipaddress
 import math
 import os
+import socket
 import smtplib
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Literal, Optional
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -256,6 +259,57 @@ def _budget_level(usage_ratio: float, warning_threshold: float, critical_thresho
     if usage_ratio >= warning_threshold:
         return "warning"
     return "ok"
+
+
+def _is_non_public_ip(ip_value: str) -> Optional[bool]:
+    try:
+        ip = ipaddress.ip_address(ip_value)
+    except ValueError:
+        return None
+    return not ip.is_global
+
+
+def _validate_webhook_probe_target(raw_url: str, *, resolve_dns: bool) -> tuple[bool, str]:
+    url = str(raw_url or "").strip()
+    if not url:
+        return False, "地址为空"
+
+    try:
+        parsed = urlsplit(url)
+    except Exception:
+        return False, "URL 解析失败"
+
+    if parsed.scheme not in {"http", "https"}:
+        return False, "仅允许 http/https 协议"
+
+    if parsed.username or parsed.password:
+        return False, "不允许携带用户名或密码"
+
+    host = (parsed.hostname or "").strip()
+    if not host:
+        return False, "缺少主机名"
+    if host.lower() in {"localhost", "localhost.localdomain"}:
+        return False, "禁止访问本机地址"
+    if host.endswith(".local"):
+        return False, "禁止访问内网主机域名"
+
+    host_ip_check = _is_non_public_ip(host)
+    if host_ip_check is True:
+        return False, "禁止访问私网/保留地址"
+
+    if resolve_dns:
+        try:
+            resolved = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+        except Exception:
+            return False, "域名解析失败"
+
+        for item in resolved:
+            sockaddr = item[4]
+            ip_value = str(sockaddr[0] if isinstance(sockaddr, tuple) else "")
+            ip_check = _is_non_public_ip(ip_value)
+            if ip_check is True:
+                return False, "解析结果包含私网/保留地址"
+    return True, "ok"
 
 
 def _resolve_retry_action(retry_mode: str, current_status: str) -> Literal["generate", "evaluate"]:
@@ -1171,7 +1225,22 @@ async def get_config_health(
             message="未配置 generation.alert.webhook_url",
             details={},
         )
-    elif not run_connectivity:
+    else:
+        webhook_safe, webhook_check_message = await asyncio.to_thread(
+            _validate_webhook_probe_target,
+            webhook_target,
+            resolve_dns=run_connectivity,
+        )
+        if not webhook_safe:
+            _append_item(
+                key="webhook.connectivity",
+                label="Webhook 连通性",
+                level="fail",
+                message=f"Webhook 地址安全校验失败：{webhook_check_message}",
+                details={"url": webhook_target},
+            )
+            webhook_target = ""
+    if webhook_target and not run_connectivity:
         _append_item(
             key="webhook.connectivity",
             label="Webhook 连通性",
@@ -1179,7 +1248,7 @@ async def get_config_health(
             message="Webhook 地址已配置（未执行在线连通测试）",
             details={"url": webhook_target},
         )
-    else:
+    elif webhook_target:
         started = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
