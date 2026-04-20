@@ -936,6 +936,14 @@ watch(
     color-mix(in srgb, var(--md-surface-dim) 74%, #ffffff 26%);
 }
 
+.novel-detail-shell :deep(.md-top-app-bar) {
+  background:
+    radial-gradient(620px 180px at -12% -48%, color-mix(in srgb, var(--md-primary-container) 52%, transparent), transparent 72%),
+    color-mix(in srgb, var(--md-surface) 88%, #ffffff 12%);
+  border-bottom: 1px solid color-mix(in srgb, var(--md-outline-variant) 78%, transparent);
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
+}
+
 .detail-frame {
   max-width: var(--app-page-max-wide);
   margin: 0 auto;
@@ -944,6 +952,10 @@ watch(
 .detail-sidebar {
   width: 19rem;
   top: 68px;
+  background:
+    radial-gradient(420px 140px at -18% -24%, color-mix(in srgb, var(--md-primary-container) 36%, transparent), transparent 74%),
+    color-mix(in srgb, var(--md-surface) 92%, #ffffff 8%);
+  backdrop-filter: blur(8px);
 }
 
 .detail-sidebar-nav {

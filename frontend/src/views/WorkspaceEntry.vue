@@ -334,6 +334,27 @@ const goToWorkspace = () => {
 
 .entry-command {
   min-height: 114px;
+  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 84%, transparent);
+  transition:
+    transform var(--md-duration-short) var(--md-easing-standard),
+    box-shadow var(--md-duration-short) var(--md-easing-standard),
+    border-color var(--md-duration-short) var(--md-easing-standard);
+}
+
+.entry-command:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--md-primary) 24%, var(--md-outline) 76%);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+}
+
+.entry-log-card {
+  transition: border-color var(--md-duration-short) var(--md-easing-standard),
+    box-shadow var(--md-duration-short) var(--md-easing-standard);
+}
+
+.entry-log-card:hover {
+  border-color: color-mix(in srgb, var(--md-primary) 20%, var(--md-outline) 80%);
+  box-shadow: var(--md-elevation-1);
 }
 
 .entry-log-pagination {

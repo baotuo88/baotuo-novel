@@ -358,6 +358,17 @@ onMounted(() => {
   position: relative;
 }
 
+.workspace-shell::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(820px 260px at 8% -22%, color-mix(in srgb, var(--md-primary-container) 42%, transparent), transparent 74%),
+    radial-gradient(760px 260px at 96% -18%, color-mix(in srgb, var(--md-secondary-container) 34%, transparent), transparent 74%);
+  z-index: 0;
+}
+
 .workspace-container {
   max-width: var(--app-page-max-wide);
 }
@@ -368,6 +379,15 @@ onMounted(() => {
     radial-gradient(540px 200px at 108% -20%, color-mix(in srgb, var(--md-secondary-container) 44%, transparent), transparent 72%),
     color-mix(in srgb, var(--md-surface) 95%, #ffffff 5%);
   border-color: color-mix(in srgb, var(--md-outline-variant) 82%, transparent);
+  box-shadow: 0 16px 30px rgba(15, 23, 42, 0.08);
+  transition:
+    border-color var(--md-duration-short) var(--md-easing-standard),
+    box-shadow var(--md-duration-short) var(--md-easing-standard);
+}
+
+.workspace-main-card:hover {
+  border-color: color-mix(in srgb, var(--md-primary) 22%, var(--md-outline-variant) 78%);
+  box-shadow: 0 18px 34px rgba(15, 23, 42, 0.1);
 }
 
 .workspace-header {

@@ -3,6 +3,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const WorkspaceEntry = () => import('../views/WorkspaceEntry.vue')
+const HomeView = () => import('../views/HomeView.vue')
+const AboutView = () => import('../views/AboutView.vue')
 const NovelWorkspace = () => import('../views/NovelWorkspace.vue')
 const InspirationMode = () => import('../views/InspirationMode.vue')
 const WritingDesk = () => import('../views/WritingDesk.vue')
@@ -17,6 +19,18 @@ const router = createRouter({
       path: '/',
       name: 'workspace-entry',
       component: WorkspaceEntry,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/home',
+      name: 'home',
+      component: HomeView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/about',
+      name: 'about',
+      component: AboutView,
       meta: { requiresAuth: true },
     },
     {

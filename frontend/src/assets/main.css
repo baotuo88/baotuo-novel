@@ -1,7 +1,7 @@
 /* AIMETA P=主CSS_全局样式和Tailwind导入|R=全局样式_Tailwind|NR=不含组件样式|E=-|X=internal|A=全局样式|D=tailwindcss|S=dom|RD=./README.ai */
 @import "tailwindcss";
 /* Editorial + Product Font Pair */
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
 @plugin "@tailwindcss/typography";
 
@@ -75,7 +75,7 @@
   --md-on-warning-container: #78350f;
 
   /* Page Layout */
-  --app-page-max: 1440px;
+  --app-page-max: 1480px;
   --app-page-max-wide: 1720px;
   --app-page-max-readable: 1200px;
   --app-gutter-x: clamp(14px, 2vw, 28px);
@@ -84,7 +84,7 @@
 
   /* Typography Scale */
   --md-font-family: 'Plus Jakarta Sans', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --md-font-display: 'Plus Jakarta Sans', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --md-font-display: 'Sora', 'Plus Jakarta Sans', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --md-font-mono: 'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace;
   
   /* Display */
@@ -172,13 +172,14 @@ body {
   min-height: 100dvh;
   font-family: var(--md-font-family);
   font-size: var(--md-body-medium);
-  line-height: 1.66;
+  line-height: 1.62;
   color: var(--md-on-background);
   background:
-    radial-gradient(1260px 620px at -8% -24%, rgba(29, 78, 216, 0.16), transparent 62%),
-    radial-gradient(920px 500px at 106% -14%, rgba(15, 118, 110, 0.13), transparent 60%),
-    radial-gradient(700px 360px at 50% -28%, rgba(56, 189, 248, 0.09), transparent 70%),
-    linear-gradient(152deg, #f8fbff 0%, #f1f7fd 49%, #edf6fb 100%);
+    radial-gradient(1320px 680px at -10% -28%, rgba(29, 78, 216, 0.18), transparent 62%),
+    radial-gradient(980px 540px at 108% -12%, rgba(15, 118, 110, 0.14), transparent 62%),
+    radial-gradient(760px 380px at 50% -34%, rgba(56, 189, 248, 0.08), transparent 70%),
+    linear-gradient(154deg, #f8fbff 0%, #f2f8ff 52%, #ecf6fb 100%);
+  background-attachment: fixed;
   margin: 0;
   padding: 0;
 }
@@ -197,8 +198,8 @@ h1, h2, h3, h4, h5, h6 {
   margin: 0;
   font-family: var(--md-font-display);
   color: var(--md-on-surface);
-  font-weight: 700;
-  letter-spacing: -0.018em;
+  font-weight: 680;
+  letter-spacing: -0.022em;
   line-height: 1.28;
 }
 
@@ -350,13 +351,13 @@ a[href],
   align-items: center;
   justify-content: center;
   gap: 9px;
-  min-height: 44px;
+  min-height: 45px;
   padding: 0 20px;
   border: 1px solid transparent;
   border-radius: var(--md-radius-full);
   font-family: var(--md-font-family);
   font-size: var(--md-label-large);
-  font-weight: 600;
+  font-weight: 650;
   letter-spacing: 0.1px;
   text-decoration: none;
   cursor: pointer;
@@ -386,12 +387,12 @@ a[href],
 .md-btn-filled {
   background: linear-gradient(135deg, var(--md-primary-light), var(--md-primary));
   color: var(--md-on-primary);
-  box-shadow: 0 6px 14px color-mix(in srgb, var(--md-primary) 24%, transparent);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--md-primary) 24%, transparent);
 }
 
 .md-btn-filled:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 10px 20px color-mix(in srgb, var(--md-primary) 28%, transparent);
+  box-shadow: 0 12px 26px color-mix(in srgb, var(--md-primary) 32%, transparent);
   background: linear-gradient(135deg, var(--md-primary), var(--md-primary-dark));
 }
 
@@ -528,8 +529,9 @@ a[href],
    Material 3 Card Styles
    ============================================ */
 .md-card {
-  background-color: color-mix(in srgb, var(--md-surface) 92%, #ffffff 8%);
-  border-radius: 16px;
+  background:
+    linear-gradient(152deg, color-mix(in srgb, var(--md-surface) 90%, #ffffff 10%), color-mix(in srgb, var(--md-surface-container-low) 84%, #ffffff 16%));
+  border-radius: 18px;
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 86%, transparent);
   overflow: hidden;
   transition:
@@ -543,8 +545,8 @@ a[href],
 }
 
 .md-card-elevated:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--md-elevation-2);
+  transform: translateY(-2px) scale(1.002);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
   border-color: color-mix(in srgb, var(--md-primary) 22%, var(--md-outline-variant) 78%);
 }
 
@@ -1337,14 +1339,14 @@ a[href],
   justify-content: space-between;
   gap: 16px;
   padding: 16px 18px;
-  border-radius: calc(var(--md-radius-lg) + 2px);
-  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 84%, transparent);
+  border-radius: calc(var(--md-radius-lg) + 3px);
+  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 78%, transparent);
   background:
-    radial-gradient(620px 170px at -15% -55%, color-mix(in srgb, var(--md-primary-container) 62%, transparent), transparent 70%),
-    radial-gradient(520px 150px at 108% -40%, color-mix(in srgb, var(--md-secondary-container) 50%, transparent), transparent 72%),
-    color-mix(in srgb, var(--md-surface) 90%, #ffffff 10%);
-  box-shadow: var(--md-elevation-2);
-  backdrop-filter: blur(10px);
+    radial-gradient(640px 220px at -14% -58%, color-mix(in srgb, var(--md-primary-container) 64%, transparent), transparent 72%),
+    radial-gradient(560px 180px at 108% -42%, color-mix(in srgb, var(--md-secondary-container) 48%, transparent), transparent 72%),
+    color-mix(in srgb, var(--md-surface) 86%, #ffffff 14%);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+  backdrop-filter: blur(12px) saturate(118%);
   position: sticky;
   top: 12px;
   z-index: 16;
@@ -1386,15 +1388,15 @@ a[href],
 }
 
 .platform-panel {
-  border-radius: calc(var(--md-radius-xl) + 2px);
+  border-radius: calc(var(--md-radius-xl) + 3px);
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 84%, transparent);
   background:
-    radial-gradient(520px 170px at 102% -28%, color-mix(in srgb, var(--md-secondary-container) 46%, transparent), transparent 72%),
-    radial-gradient(420px 140px at -12% -42%, color-mix(in srgb, var(--md-primary-container) 42%, transparent), transparent 74%),
-    color-mix(in srgb, var(--md-surface) 93%, #ffffff 7%);
-  box-shadow: var(--md-elevation-2);
+    radial-gradient(560px 210px at 102% -28%, color-mix(in srgb, var(--md-secondary-container) 50%, transparent), transparent 72%),
+    radial-gradient(460px 170px at -12% -42%, color-mix(in srgb, var(--md-primary-container) 44%, transparent), transparent 74%),
+    color-mix(in srgb, var(--md-surface) 90%, #ffffff 10%);
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.09);
   padding: clamp(16px, 2vw, 24px);
-  backdrop-filter: blur(7px);
+  backdrop-filter: blur(8px) saturate(112%);
   overflow: hidden;
 }
 
@@ -1414,7 +1416,7 @@ a[href],
   border-radius: var(--md-radius-lg);
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 82%, transparent);
   background:
-    linear-gradient(145deg, color-mix(in srgb, var(--md-surface) 78%, #ffffff 22%), color-mix(in srgb, var(--md-surface-container-low) 86%, #ffffff 14%));
+    linear-gradient(148deg, color-mix(in srgb, var(--md-surface) 74%, #ffffff 26%), color-mix(in srgb, var(--md-surface-container-low) 84%, #ffffff 16%));
   padding: 15px 16px;
   min-height: 124px;
   display: flex;
@@ -1457,7 +1459,7 @@ a[href],
   border-radius: var(--md-radius-lg);
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 84%, transparent);
   background:
-    linear-gradient(145deg, color-mix(in srgb, var(--md-surface-container-low) 86%, white 14%), color-mix(in srgb, var(--md-surface) 92%, #ffffff 8%));
+    linear-gradient(146deg, color-mix(in srgb, var(--md-surface-container-low) 80%, white 20%), color-mix(in srgb, var(--md-surface) 90%, #ffffff 10%));
   padding: 18px;
   min-height: 136px;
   display: flex;
@@ -1474,7 +1476,7 @@ a[href],
   transform: translateY(-3px);
   border-color: color-mix(in srgb, var(--md-primary) 30%, var(--md-outline-variant) 70%);
   background: color-mix(in srgb, var(--md-primary-container) 30%, var(--md-surface) 70%);
-  box-shadow: var(--md-elevation-2);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.1);
 }
 
 .platform-kicker {
@@ -1548,7 +1550,7 @@ a[href],
   background:
     radial-gradient(620px 240px at -10% -26%, color-mix(in srgb, var(--md-primary-container) 52%, transparent), transparent 72%),
     color-mix(in srgb, var(--md-surface) 94%, #ffffff 6%);
-  box-shadow: var(--md-elevation-2);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.09);
   padding: 30px;
   display: flex;
   flex-direction: column;
@@ -1558,8 +1560,10 @@ a[href],
 .auth-form-panel {
   padding: 30px;
   align-self: stretch;
-  background: color-mix(in srgb, var(--md-surface) 95%, #ffffff 5%);
-  box-shadow: var(--md-elevation-2);
+  background:
+    radial-gradient(480px 170px at 110% -38%, color-mix(in srgb, var(--md-secondary-container) 32%, transparent), transparent 72%),
+    color-mix(in srgb, var(--md-surface) 94%, #ffffff 6%);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.09);
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 82%, transparent);
 }
 
@@ -2087,6 +2091,9 @@ a[href],
    ============================================ */
 .admin-shell :where(.n-card) {
   border-radius: var(--md-radius-lg);
+  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 82%, transparent);
+  background:
+    linear-gradient(148deg, color-mix(in srgb, var(--md-surface) 92%, #ffffff 8%), color-mix(in srgb, var(--md-surface-container-low) 84%, #ffffff 16%));
 }
 
 .admin-shell :where(.n-card .n-card-header) {
@@ -2102,6 +2109,7 @@ a[href],
 
 .admin-shell :where(.n-data-table .n-data-table-th) {
   font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 /* ============================================

@@ -23,12 +23,27 @@
       <section class="settings-layout">
         <aside class="settings-nav md-card md-card-outlined">
           <h2 class="md-title-medium settings-nav-title">设置导航</h2>
+          <p class="settings-nav-subtitle">当前版本开放 LLM 配置，后续会扩展更多治理模块。</p>
           <button type="button" class="settings-nav-item settings-nav-item-active">
-            LLM 配置
+            <span class="settings-nav-icon">AI</span>
+            <span>LLM 配置</span>
+          </button>
+          <button type="button" class="settings-nav-item settings-nav-item-disabled" disabled>
+            <span class="settings-nav-icon">ST</span>
+            <span>存储策略（规划中）</span>
+          </button>
+          <button type="button" class="settings-nav-item settings-nav-item-disabled" disabled>
+            <span class="settings-nav-icon">SEC</span>
+            <span>安全策略（规划中）</span>
           </button>
         </aside>
 
         <main class="settings-main">
+          <section class="settings-summary">
+            <MetricCard label="核心模块" value="LLM" hint="模型、预算、导出配置" compact />
+            <MetricCard label="面向对象" value="创作者 / 管理员" hint="统一后台策略中心" compact />
+            <MetricCard label="配置方式" value="系统级" hint="支持默认值与覆盖策略" compact />
+          </section>
           <LLMSettings />
         </main>
       </section>
@@ -38,6 +53,7 @@
 
 <script setup lang="ts">
 import LLMSettings from '@/components/LLMSettings.vue'
+import MetricCard from '@/components/shared/MetricCard.vue'
 </script>
 
 <style scoped>
@@ -68,7 +84,14 @@ import LLMSettings from '@/components/LLMSettings.vue'
 
 .settings-nav-title {
   color: var(--md-on-surface);
-  margin-bottom: 6px;
+}
+
+.settings-nav-subtitle {
+  margin: 0;
+  color: var(--md-on-surface-variant);
+  font-size: var(--md-body-small);
+  line-height: 1.5;
+  padding-bottom: 4px;
 }
 
 .settings-nav-item {
@@ -80,6 +103,9 @@ import LLMSettings from '@/components/LLMSettings.vue'
   padding: 9px 12px;
   font-size: var(--md-body-medium);
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .settings-nav-item-active {
@@ -88,8 +114,34 @@ import LLMSettings from '@/components/LLMSettings.vue'
   color: var(--md-on-primary-container);
 }
 
+.settings-nav-item-disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+.settings-nav-icon {
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--md-primary);
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--md-primary) 22%, transparent);
+  background: color-mix(in srgb, var(--md-primary-container) 72%, #ffffff 28%);
+  padding: 4px 7px;
+}
+
 .settings-main {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 @media (max-width: 1024px) {
@@ -101,6 +153,10 @@ import LLMSettings from '@/components/LLMSettings.vue'
   .settings-nav {
     position: static;
     top: auto;
+  }
+
+  .settings-summary {
+    grid-template-columns: 1fr;
   }
 }
 </style>
