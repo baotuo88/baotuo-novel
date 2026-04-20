@@ -158,6 +158,7 @@ interface Props {
   selectedChapterNumber: number | null
   generatingChapter: number | null
   evaluatingChapter: number | null
+  chapterFailureMessage?: string
   showVersionSelector: boolean
   chapterGenerationResult: ChapterGenerationResponse | null
   selectedVersionIndex: number
@@ -419,7 +420,8 @@ const currentComponentProps = computed(() => {
   if (isChapterFailed(props.selectedChapterNumber)) {
     return {
       chapterNumber: props.selectedChapterNumber,
-      generatingChapter: props.generatingChapter
+      generatingChapter: props.generatingChapter,
+      failureMessage: props.chapterFailureMessage || ''
     }
   }
   return {

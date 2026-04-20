@@ -60,7 +60,7 @@ SYSTEM_CONFIG_DEFAULTS: list[SystemConfigDefault] = [
     ),
     SystemConfigDefault(
         key="llm.route.retry_on_any_error",
-        value_getter=lambda _config: "false",
+        value_getter=lambda _config: "true",
         description="是否在非可重试错误时也切换到下一个后端路由。",
     ),
     SystemConfigDefault(

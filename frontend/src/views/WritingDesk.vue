@@ -76,6 +76,7 @@
               :selected-chapter-number="selectedChapterNumber"
               :generating-chapter="generatingChapter"
               :evaluating-chapter="evaluatingChapter"
+              :chapter-failure-message="selectedChapterNumber !== null ? (chapterFailureMessageMap.get(selectedChapterNumber) || '') : ''"
               :show-version-selector="showVersionSelector"
               :chapter-generation-result="chapterGenerationResult"
               :selected-version-index="selectedVersionIndex"
@@ -207,6 +208,7 @@ const taskStreamFailureCount = ref(0)
 const taskStreamLastFailureMessage = ref('')
 const manualReconnectLoading = ref(false)
 const chapterQueueStateCache = new Map<number, string>()
+const chapterFailureMessageMap = new Map<number, string>()
 const taskStreamKnownFailedTaskIds = new Set<string>()
 const CHAPTER_STATUS_POLL_INTERVAL_MS = 5000
 const PROJECT_FULL_SYNC_INTERVAL_TICKS = 6
@@ -613,6 +615,7 @@ const stopTaskStream = (options: { resetMeta?: boolean } = {}) => {
     taskStreamKnownFailedTaskIds.clear()
   }
   chapterQueueStateCache.clear()
+  chapterFailureMessageMap.clear()
 }
 
 const scheduleTaskStreamReconnect = () => {
@@ -694,6 +697,7 @@ const applyTaskSnapshot = async (snapshot: WriterTaskCenterResponse) => {
     if (!chapter) continue
 
     if (item.queue_state === 'active') {
+      chapterFailureMessageMap.delete(chapterNumber)
       if (!['evaluating', 'selecting', 'waiting_for_confirm'].includes(chapter.generation_status)) {
         chapter.generation_status = 'generating'
       }
@@ -702,11 +706,14 @@ const applyTaskSnapshot = async (snapshot: WriterTaskCenterResponse) => {
 
     if (item.queue_state === 'failed') {
       chapter.generation_status = 'failed'
+      const message = resolveTaskFailureMessage(item)
+      if (message) {
+        chapterFailureMessageMap.set(chapterNumber, message)
+      }
       const isStateTransitionFailed = Boolean(previousQueueState && previousQueueState !== 'failed')
       const isFreshFailure = Number(item.age_minutes || 0) <= 1
       const shouldNotifyFailure = (isStateTransitionFailed || isFreshFailure) && !taskStreamKnownFailedTaskIds.has(item.task_id)
       if (shouldNotifyFailure) {
-        const message = resolveTaskFailureMessage(item)
         const title = `第${chapterNumber}章任务失败`
         globalAlert.showError(message || '任务失败，请重试', title)
       }
@@ -718,6 +725,7 @@ const applyTaskSnapshot = async (snapshot: WriterTaskCenterResponse) => {
     }
 
     if (item.queue_state === 'done' && previousQueueState !== 'done') {
+      chapterFailureMessageMap.delete(chapterNumber)
       numbersNeedRefresh.add(chapterNumber)
     }
   }
@@ -895,6 +903,7 @@ const generateChapter = async (chapterNumber: number) => {
   try {
     generatingChapter.value = chapterNumber
     selectedChapterNumber.value = chapterNumber
+    chapterFailureMessageMap.delete(chapterNumber)
 
     // 在本地更新章节状态为generating
     if (project.value?.chapters) {

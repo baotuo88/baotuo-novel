@@ -3,10 +3,14 @@
 """OpenAI 兼容型 LLM 工具封装，保持与旧项目一致的接口体验。"""
 
 import os
+import logging
 from dataclasses import asdict, dataclass
 from typing import AsyncGenerator, Dict, List, Optional
 
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -61,7 +65,10 @@ class LLMClient:
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
 
-        stream = await self._client.chat.completions.create(**payload)
+        stream = await self._create_stream_with_format_fallback(
+            payload=payload,
+            response_format=response_format,
+        )
         async for chunk in stream:
             if not chunk.choices:
                 continue
@@ -70,3 +77,43 @@ class LLMClient:
                 "content": choice.delta.content,
                 "finish_reason": choice.finish_reason,
             }
+
+    async def _create_stream_with_format_fallback(
+        self,
+        *,
+        payload: Dict[str, object],
+        response_format: Optional[str],
+    ):
+        try:
+            return await self._client.chat.completions.create(**payload)
+        except APIStatusError as exc:
+            if not self._should_retry_without_response_format(exc, response_format):
+                raise
+
+            fallback_payload = dict(payload)
+            fallback_payload.pop("response_format", None)
+            logger.warning(
+                "OpenAI-compatible endpoint rejected response_format, retry without response_format: status=%s model=%s",
+                getattr(exc, "status_code", None)
+                or getattr(getattr(exc, "response", None), "status_code", None),
+                payload.get("model"),
+            )
+            return await self._client.chat.completions.create(**fallback_payload)
+
+    @staticmethod
+    def _should_retry_without_response_format(exc: APIStatusError, response_format: Optional[str]) -> bool:
+        if not response_format:
+            return False
+        code = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+        if code != 400:
+            return False
+        text = str(exc).lower()
+        keywords = [
+            "response_format",
+            "json_schema",
+            "unsupported",
+            "not support",
+            "invalid type",
+            "schema",
+        ]
+        return any(keyword in text for keyword in keywords)

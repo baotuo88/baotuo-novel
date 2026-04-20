@@ -56,6 +56,7 @@ class StreamErrorInfo:
     detail: str
     retryable: bool
     error_type: str
+    retry_after_seconds: Optional[float] = None
 
 
 @dataclass
@@ -173,6 +174,7 @@ class LLMService:
             timeout=timeout,
             request_type="summary",
             project_id=project_id,
+            max_retries_override=2,
         )
 
     async def _stream_and_collect(
@@ -231,7 +233,7 @@ class LLMService:
         backoff_ms = await self._get_int_config("llm.retry.backoff_ms", default=600, min_value=100, max_value=10_000)
         retry_on_any_route_error = await self._get_bool_config(
             "llm.route.retry_on_any_error",
-            default=False,
+            default=True,
         )
         last_error: Optional[StreamErrorInfo] = None
         attempt_index = 0
@@ -425,8 +427,18 @@ class LLMService:
                             error_message=error_info.detail,
                             commit=True,
                         )
-                        if error_info.retryable and retry_i < per_model_attempts - 1:
-                            await asyncio.sleep((backoff_ms * (2 ** retry_i)) / 1000)
+                        if (
+                            error_info.retryable
+                            and retry_i < per_model_attempts - 1
+                            and error_info.error_type != "ModelCompatibilityError"
+                        ):
+                            await asyncio.sleep(
+                                self._resolve_retry_delay_seconds(
+                                    error_info=error_info,
+                                    retry_i=retry_i,
+                                    base_backoff_ms=backoff_ms,
+                                )
+                            )
                             continue
                         break
 
@@ -471,9 +483,9 @@ class LLMService:
                     if not full_response:
                         detail = f"AI 未返回有效内容（结束原因: {finish_reason or '未知'}），请稍后重试或联系管理员"
                         route_last_error = StreamErrorInfo(
-                            status_code=500,
+                            status_code=503,
                             detail=detail,
-                            retryable=False,
+                            retryable=True,
                             error_type="EmptyResponse",
                         )
                         last_error = route_last_error
@@ -494,6 +506,15 @@ class LLMService:
                             error_message=detail,
                             commit=True,
                         )
+                        if retry_i < per_model_attempts - 1:
+                            await asyncio.sleep(
+                                self._resolve_retry_delay_seconds(
+                                    error_info=route_last_error,
+                                    retry_i=retry_i,
+                                    base_backoff_ms=backoff_ms,
+                                )
+                            )
+                            continue
                         break
 
                     output_chars = len(full_response)
@@ -552,6 +573,7 @@ class LLMService:
                 detail="AI 服务触发限流，请稍后重试",
                 retryable=True,
                 error_type=exc.__class__.__name__,
+                retry_after_seconds=self._extract_retry_after_seconds(exc),
             )
 
         if isinstance(exc, InternalServerError):
@@ -581,14 +603,20 @@ class LLMService:
                 detail = "AI 服务访问被拒绝，请检查账号权限"
             elif code == 404:
                 detail = "AI 模型或接口不存在，请检查模型与 Base URL"
+            elif code == 400:
+                detail = self._extract_api_error_message(exc) or "AI 服务调用失败（HTTP 400）"
             else:
                 detail = f"AI 服务调用失败（HTTP {code or '未知'}）"
-            retryable = bool(code in RETRYABLE_HTTP_STATUS) if code else True
+            is_compatibility_error = bool(code == 400 and self._is_model_compatibility_error(detail))
+            retryable = (
+                bool(code in RETRYABLE_HTTP_STATUS) if code else True
+            ) or is_compatibility_error
             return StreamErrorInfo(
                 status_code=429 if code == 429 else 503,
                 detail=detail,
                 retryable=retryable,
-                error_type=exc.__class__.__name__,
+                error_type="ModelCompatibilityError" if is_compatibility_error else exc.__class__.__name__,
+                retry_after_seconds=self._extract_retry_after_seconds(exc),
             )
 
         if isinstance(exc, httpx.RemoteProtocolError):
@@ -618,6 +646,82 @@ class LLMService:
             retryable=False,
             error_type=exc.__class__.__name__,
         )
+
+    @staticmethod
+    def _extract_retry_after_seconds(exc: Exception) -> Optional[float]:
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", None)
+        if not headers:
+            return None
+        raw = headers.get("retry-after") or headers.get("Retry-After")
+        if not raw:
+            return None
+        try:
+            value = float(str(raw).strip())
+        except Exception:
+            return None
+        if value <= 0:
+            return None
+        return min(value, 60.0)
+
+    @staticmethod
+    def _extract_api_error_message(exc: Exception) -> Optional[str]:
+        response = getattr(exc, "response", None)
+        if response is None:
+            return None
+        try:
+            payload = response.json()
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        error_data = payload.get("error")
+        if isinstance(error_data, dict):
+            message = error_data.get("message_zh") or error_data.get("message")
+            if message:
+                return str(message).strip()
+        message = payload.get("message")
+        if message:
+            return str(message).strip()
+        return None
+
+    @staticmethod
+    def _is_model_compatibility_error(detail: str) -> bool:
+        text = str(detail or "").strip().lower()
+        if not text:
+            return False
+        keywords = [
+            "response_format",
+            "json_schema",
+            "unsupported",
+            "not support",
+            "invalid type",
+            "unknown parameter",
+            "unsupported parameter",
+            "schema",
+            "tool_choice",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "不支持",
+            "无效参数",
+            "未知参数",
+        ]
+        return any(token in text for token in keywords)
+
+    @staticmethod
+    def _resolve_retry_delay_seconds(
+        *,
+        error_info: StreamErrorInfo,
+        retry_i: int,
+        base_backoff_ms: int,
+    ) -> float:
+        delay = max(0.1, (base_backoff_ms * (2 ** retry_i)) / 1000)
+        if error_info.status_code == 429 or "限流" in error_info.detail:
+            delay = max(delay, 1.8)
+        if error_info.retry_after_seconds:
+            delay = max(delay, float(error_info.retry_after_seconds))
+        return min(delay, 60.0)
 
     async def _get_model_candidates(
         self,

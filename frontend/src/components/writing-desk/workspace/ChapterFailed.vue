@@ -8,7 +8,11 @@
         </svg>
       </div>
       <h3 class="md-headline-small font-semibold mb-3">第{{ chapterNumber }}章生成失败</h3>
-      <p class="md-body-medium md-on-surface-variant mb-6">很抱歉，AI在生成这个章节时遇到了问题。请点击重试按钮重新生成。</p>
+      <p class="md-body-medium md-on-surface-variant mb-2">很抱歉，AI在生成这个章节时遇到了问题。请点击重试按钮重新生成。</p>
+      <p v-if="failureMessage" class="md-body-small mb-6 text-left rounded-lg px-3 py-2" style="background: var(--md-surface-container-high); color: var(--md-on-surface-variant);">
+        {{ failureMessage }}
+      </p>
+      <div v-else class="mb-6"></div>
       <button
         @click="$emit('generateChapter', chapterNumber)"
         :disabled="generatingChapter === chapterNumber"
@@ -31,6 +35,7 @@
 interface Props {
   chapterNumber: number
   generatingChapter: number | null
+  failureMessage?: string
 }
 
 defineProps<Props>()
