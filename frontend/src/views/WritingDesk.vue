@@ -210,8 +210,8 @@ const manualReconnectLoading = ref(false)
 const chapterQueueStateCache = new Map<number, string>()
 const chapterFailureMessageMap = new Map<number, string>()
 const taskStreamKnownFailedTaskIds = new Set<string>()
-const CHAPTER_STATUS_POLL_INTERVAL_MS = 5000
-const PROJECT_FULL_SYNC_INTERVAL_TICKS = 6
+const CHAPTER_STATUS_POLL_INTERVAL_MS = 7000
+const PROJECT_FULL_SYNC_INTERVAL_TICKS = 18
 const TASK_STREAM_RECONNECT_DELAY_MS = 2500
 const TASK_STREAM_MAX_RECONNECT_ATTEMPTS = 12
 const TASK_STREAM_FAILURE_RECENT_MINUTES = 8
@@ -543,10 +543,12 @@ const fetchChapterStatus = async () => {
   if (selectedChapterNumber.value === null) {
     return
   }
+  if (document.hidden) {
+    return
+  }
   try {
     await novelStore.loadChapter(selectedChapterNumber.value)
     syncGenerationIndicators()
-    console.log('Chapter status polled and updated.')
   } catch (error) {
     console.error('轮询章节状态失败:', error)
     // 在这里可以决定是否要通知用户轮询失败
@@ -562,6 +564,9 @@ const stopChapterStatusPolling = () => {
 }
 
 const pollProjectStatus = async () => {
+  if (document.hidden) {
+    return
+  }
   pollingTick += 1
   try {
     await novelStore.refreshChapterStatuses(props.id)

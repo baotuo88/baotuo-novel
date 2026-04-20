@@ -1,6 +1,9 @@
 # AIMETA P=项目资源API_宪法人格记忆等|R=项目资源管理|NR=不含生成逻辑|E=route:GET_PUT_/api/projects/*|X=http|A=资源接口|D=fastapi,sqlalchemy|S=db|RD=./README.ai
 import json
 import logging
+import hashlib
+import time
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -8,14 +11,14 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ...core.dependencies import get_current_user
 from ...db.session import get_session
 from ...models.faction import FactionRelationship
-from ...models.novel import Chapter
+from ...models.novel import Chapter, ChapterVersion
 from ...models.foreshadowing import Foreshadowing, ForeshadowingAnalysis
 from ...models.memory_layer import TimelineEvent
 from ...schemas.user import UserInDB
@@ -32,6 +35,17 @@ from ...models.project_memory import ProjectMemory
 
 router = APIRouter(prefix="/api/projects", tags=["Projects"])
 logger = logging.getLogger(__name__)
+
+GLOBAL_SEARCH_CACHE_TTL_SECONDS = 90.0
+GLOBAL_SEARCH_CACHE_MAX_ITEMS = 256
+QUALITY_DASHBOARD_CACHE_TTL_SECONDS = 60.0
+QUALITY_DASHBOARD_CACHE_MAX_ITEMS = 128
+GLOBAL_SEARCH_CHAPTER_CONTENT_SCAN_CHARS = 8000
+GLOBAL_SEARCH_BLOB_SCAN_CHARS = 4000
+
+_GLOBAL_SEARCH_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_QUALITY_DASHBOARD_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_ROUTER_CACHE_LOCK = asyncio.Lock()
 
 
 class PersonaPayload(BaseModel):
@@ -354,6 +368,61 @@ def _build_search_snippet(raw_text: Any, tokens: List[str], max_length: int = 14
     prefix = "..." if start > 0 else ""
     suffix = "..." if (start + max_length) < len(text) else ""
     return f"{prefix}{snippet}{suffix}"
+
+
+def _clip_search_blob(value: Any, max_chars: int = GLOBAL_SEARCH_BLOB_SCAN_CHARS) -> str:
+    text = str(value or "")
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars]
+
+
+def _build_ttl_cache_key(prefix: str, payload: Dict[str, Any]) -> str:
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    digest = hashlib.sha1(serialized.encode("utf-8")).hexdigest()
+    return f"{prefix}:{digest}"
+
+
+def _prune_ttl_cache(cache: Dict[str, tuple[float, Dict[str, Any]]], *, max_items: int) -> None:
+    now = time.monotonic()
+    stale_keys = [key for key, (expires_at, _) in cache.items() if expires_at <= now]
+    for key in stale_keys:
+        cache.pop(key, None)
+    if len(cache) <= max_items:
+        return
+    overflow = len(cache) - max_items
+    for key, _ in sorted(cache.items(), key=lambda item: item[1][0])[:overflow]:
+        cache.pop(key, None)
+
+
+async def _get_ttl_cache_entry(
+    cache: Dict[str, tuple[float, Dict[str, Any]]],
+    key: str,
+) -> Optional[Dict[str, Any]]:
+    now = time.monotonic()
+    async with _ROUTER_CACHE_LOCK:
+        cached = cache.get(key)
+        if not cached:
+            return None
+        expires_at, payload = cached
+        if expires_at <= now:
+            cache.pop(key, None)
+            return None
+        return payload
+
+
+async def _set_ttl_cache_entry(
+    cache: Dict[str, tuple[float, Dict[str, Any]]],
+    *,
+    key: str,
+    payload: Dict[str, Any],
+    ttl_seconds: float,
+    max_items: int,
+) -> None:
+    expires_at = time.monotonic() + max(1.0, float(ttl_seconds))
+    async with _ROUTER_CACHE_LOCK:
+        cache[key] = (expires_at, payload)
+        _prune_ttl_cache(cache, max_items=max_items)
 
 
 def _short_text(value: Any, max_length: int = 72) -> str:
@@ -1059,6 +1128,20 @@ async def search_project_global(
     if not scope_set:
         raise HTTPException(status_code=400, detail="scopes 参数无效")
 
+    cache_key = _build_ttl_cache_key(
+        "global-search",
+        {
+            "project_id": project_id,
+            "query": query_text,
+            "tokens": tokens,
+            "limit": limit,
+            "scopes": sorted(scope_set),
+        },
+    )
+    cached_payload = await _get_ttl_cache_entry(_GLOBAL_SEARCH_CACHE, cache_key)
+    if cached_payload is not None:
+        return GlobalSearchResponse(**cached_payload)
+
     results: List[Dict[str, Any]] = []
     seen_keys: set[str] = set()
 
@@ -1078,7 +1161,10 @@ async def search_project_global(
         if unique_key in seen_keys:
             return
         seen_keys.add(unique_key)
-        snippet = _build_search_snippet(snippet_source, tokens)
+        snippet = _build_search_snippet(
+            _clip_search_blob(snippet_source, max_chars=GLOBAL_SEARCH_BLOB_SCAN_CHARS),
+            tokens,
+        )
         results.append(
             {
                 "id": item_id,
@@ -1116,7 +1202,10 @@ async def search_project_global(
             anchor={"section": "overview"},
         )
 
-        world_setting_blob = json.dumps(blueprint.get("world_setting") or {}, ensure_ascii=False)
+        world_setting_blob = _clip_search_blob(
+            json.dumps(blueprint.get("world_setting") or {}, ensure_ascii=False),
+            max_chars=GLOBAL_SEARCH_BLOB_SCAN_CHARS,
+        )
         world_setting_hits = _count_search_hits(_normalize_search_text(world_setting_blob), tokens)
         push_item(
             item_id="blueprint:world_setting",
@@ -1133,7 +1222,10 @@ async def search_project_global(
                 if not isinstance(character, dict):
                     continue
                 name = str(character.get("name") or f"角色 {index}").strip() or f"角色 {index}"
-                blob = json.dumps(character, ensure_ascii=False)
+                blob = _clip_search_blob(
+                    json.dumps(character, ensure_ascii=False),
+                    max_chars=GLOBAL_SEARCH_BLOB_SCAN_CHARS,
+                )
                 hits = _count_search_hits(_normalize_search_text(blob), tokens)
                 push_item(
                     item_id=f"character:{index}",
@@ -1152,7 +1244,10 @@ async def search_project_global(
                 from_name = str(relation.get("character_from") or relation.get("from") or "").strip()
                 to_name = str(relation.get("character_to") or relation.get("to") or "").strip()
                 relation_title = " - ".join(item for item in [from_name, to_name] if item) or f"关系 {index}"
-                blob = json.dumps(relation, ensure_ascii=False)
+                blob = _clip_search_blob(
+                    json.dumps(relation, ensure_ascii=False),
+                    max_chars=GLOBAL_SEARCH_BLOB_SCAN_CHARS,
+                )
                 hits = _count_search_hits(_normalize_search_text(blob), tokens)
                 push_item(
                     item_id=f"relationship:{index}",
@@ -1172,7 +1267,10 @@ async def search_project_global(
                 chapter_number = int(item.get("chapter_number") or 0)
                 title = str(item.get("title") or f"第{chapter_number}章").strip() or f"第{chapter_number}章"
                 summary = str(item.get("summary") or "").strip()
-                blob = f"{title}\n{summary}"
+                blob = _clip_search_blob(
+                    f"{title}\n{summary}",
+                    max_chars=GLOBAL_SEARCH_BLOB_SCAN_CHARS,
+                )
                 hits = _count_search_hits(_normalize_search_text(blob), tokens)
                 push_item(
                     item_id=f"outline:{chapter_number}",
@@ -1201,7 +1299,10 @@ async def search_project_global(
             title = str(item.get("title") or "未命名素材").strip() or "未命名素材"
             content = str(item.get("content") or "")
             tags = item.get("tags") if isinstance(item.get("tags"), list) else []
-            blob = "\n".join([title, content, " ".join(str(tag) for tag in tags)])
+            blob = _clip_search_blob(
+                "\n".join([title, content, " ".join(str(tag) for tag in tags)]),
+                max_chars=GLOBAL_SEARCH_BLOB_SCAN_CHARS,
+            )
             hits = _count_search_hits(_normalize_search_text(blob), tokens)
             push_item(
                 item_id=f"material:{item_id or title}",
@@ -1221,7 +1322,10 @@ async def search_project_global(
             aliases = entry.get("aliases") if isinstance(entry.get("aliases"), list) else []
             note = str(entry.get("note") or "")
             category = str(entry.get("category") or "")
-            blob = "\n".join([term, canonical, note, category, " ".join(str(item) for item in aliases)])
+            blob = _clip_search_blob(
+                "\n".join([term, canonical, note, category, " ".join(str(item) for item in aliases)]),
+                max_chars=GLOBAL_SEARCH_BLOB_SCAN_CHARS,
+            )
             hits = _count_search_hits(_normalize_search_text(blob), tokens)
             push_item(
                 item_id=f"term:{term or canonical}",
@@ -1243,13 +1347,16 @@ async def search_project_global(
         ).scalars().all()
         for event in timeline_rows:
             involved = event.involved_characters if isinstance(event.involved_characters, list) else []
-            blob = "\n".join(
-                [
-                    str(event.event_title or ""),
-                    str(event.event_description or ""),
-                    str(event.location or ""),
-                    " ".join(str(name) for name in involved),
-                ]
+            blob = _clip_search_blob(
+                "\n".join(
+                    [
+                        str(event.event_title or ""),
+                        str(event.event_description or ""),
+                        str(event.location or ""),
+                        " ".join(str(name) for name in involved),
+                    ]
+                ),
+                max_chars=GLOBAL_SEARCH_BLOB_SCAN_CHARS,
             )
             hits = _count_search_hits(_normalize_search_text(blob), tokens)
             chapter_number = int(event.chapter_number or 0)
@@ -1280,14 +1387,17 @@ async def search_project_global(
         for item in foreshadowing_rows:
             keywords = item.keywords if isinstance(item.keywords, list) else []
             related_characters = item.related_characters if isinstance(item.related_characters, list) else []
-            blob = "\n".join(
-                [
-                    str(item.content or ""),
-                    str(item.type or ""),
-                    str(item.author_note or ""),
-                    " ".join(str(key) for key in keywords),
-                    " ".join(str(name) for name in related_characters),
-                ]
+            blob = _clip_search_blob(
+                "\n".join(
+                    [
+                        str(item.content or ""),
+                        str(item.type or ""),
+                        str(item.author_note or ""),
+                        " ".join(str(key) for key in keywords),
+                        " ".join(str(name) for name in related_characters),
+                    ]
+                ),
+                max_chars=GLOBAL_SEARCH_BLOB_SCAN_CHARS,
             )
             hits = _count_search_hits(_normalize_search_text(blob), tokens)
             chapter_number = int(item.chapter_number or 0)
@@ -1309,20 +1419,30 @@ async def search_project_global(
     if "chapters" in scope_set:
         chapter_rows = (
             await session.execute(
-                select(Chapter)
-                .options(selectinload(Chapter.selected_version))
+                select(
+                    Chapter.chapter_number,
+                    Chapter.real_summary,
+                    func.substr(
+                        ChapterVersion.content,
+                        1,
+                        GLOBAL_SEARCH_CHAPTER_CONTENT_SCAN_CHARS,
+                    ).label("content_excerpt"),
+                )
+                .select_from(Chapter)
+                .outerjoin(ChapterVersion, Chapter.selected_version_id == ChapterVersion.id)
                 .where(Chapter.project_id == project_id)
                 .order_by(Chapter.chapter_number.asc())
                 .limit(2400)
             )
-        ).scalars().all()
-        for chapter in chapter_rows:
-            chapter_number = int(chapter.chapter_number or 0)
-            content = ""
-            if chapter.selected_version and chapter.selected_version.content:
-                content = str(chapter.selected_version.content)
-            summary = str(chapter.real_summary or "")
-            blob = "\n".join([summary, content])
+        ).all()
+        for chapter_number_raw, real_summary, content_excerpt in chapter_rows:
+            chapter_number = int(chapter_number_raw or 0)
+            summary = str(real_summary or "")
+            content = str(content_excerpt or "")
+            blob = _clip_search_blob(
+                "\n".join([summary, content]),
+                max_chars=GLOBAL_SEARCH_CHAPTER_CONTENT_SCAN_CHARS,
+            )
             hits = _count_search_hits(_normalize_search_text(blob), tokens)
             push_item(
                 item_id=f"chapter:{chapter_number}",
@@ -1346,6 +1466,19 @@ async def search_project_global(
         reverse=True,
     )
     sliced = results[:limit]
+    response_payload = {
+        "project_id": project_id,
+        "query": query_text,
+        "total": len(results),
+        "items": [GlobalSearchItem(**item).model_dump() for item in sliced],
+    }
+    await _set_ttl_cache_entry(
+        _GLOBAL_SEARCH_CACHE,
+        key=cache_key,
+        payload=response_payload,
+        ttl_seconds=GLOBAL_SEARCH_CACHE_TTL_SECONDS,
+        max_items=GLOBAL_SEARCH_CACHE_MAX_ITEMS,
+    )
     return GlobalSearchResponse(
         project_id=project_id,
         query=query_text,
@@ -1896,37 +2029,55 @@ async def get_project_quality_dashboard(
     novel_service = NovelService(session)
     await novel_service.ensure_project_owner(project_id, current_user.id)
 
-    chapters = (
-        await session.execute(
-            select(Chapter)
-            .options(selectinload(Chapter.selected_version))
-            .where(Chapter.project_id == project_id)
-            .order_by(Chapter.chapter_number.asc())
-        )
-    ).scalars().all()
+    cache_key = _build_ttl_cache_key(
+        "quality-dashboard",
+        {
+            "project_id": project_id,
+        },
+    )
+    cached_payload = await _get_ttl_cache_entry(_QUALITY_DASHBOARD_CACHE, cache_key)
+    if cached_payload is not None:
+        return cached_payload
 
-    total_chapters = len(chapters)
-    successful_statuses = {"successful"}
-    failed_statuses = {"failed", "evaluation_failed"}
-    successful_chapters = sum(
-        1 for item in chapters if str(item.status or "").strip().lower() in successful_statuses
-    )
-    failed_chapters = sum(
-        1 for item in chapters if str(item.status or "").strip().lower() in failed_statuses
-    )
-    avg_word_count = round(
-        (sum(int(item.word_count or 0) for item in chapters) / total_chapters), 2
-    ) if total_chapters else 0.0
+    chapter_stats_row = (
+        await session.execute(
+            select(
+                func.count(Chapter.id).label("total_chapters"),
+                func.sum(
+                    case(
+                        (func.lower(func.coalesce(Chapter.status, "")) == "successful", 1),
+                        else_=0,
+                    )
+                ).label("successful_chapters"),
+                func.sum(
+                    case(
+                        (func.lower(func.coalesce(Chapter.status, "")).in_(["failed", "evaluation_failed"]), 1),
+                        else_=0,
+                    )
+                ).label("failed_chapters"),
+                func.avg(func.coalesce(Chapter.word_count, 0)).label("avg_word_count"),
+            ).where(Chapter.project_id == project_id)
+        )
+    ).one()
+
+    total_chapters = int(chapter_stats_row.total_chapters or 0)
+    successful_chapters = int(chapter_stats_row.successful_chapters or 0)
+    failed_chapters = int(chapter_stats_row.failed_chapters or 0)
+    avg_word_count = round(float(chapter_stats_row.avg_word_count or 0.0), 2) if total_chapters else 0.0
 
     severity_breakdown: Dict[str, int] = {"critical": 0, "major": 0, "minor": 0}
     checked_versions = 0
     consistent_versions = 0
     violation_count = 0
-    for chapter in chapters:
-        selected_version = chapter.selected_version
-        if not selected_version:
-            continue
-        metadata = selected_version.metadata if isinstance(selected_version.metadata, dict) else {}
+    consistency_rows = (
+        await session.execute(
+            select(ChapterVersion.metadata_)
+            .join(Chapter, Chapter.selected_version_id == ChapterVersion.id)
+            .where(Chapter.project_id == project_id)
+        )
+    ).scalars().all()
+    for metadata_raw in consistency_rows:
+        metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
         report = metadata.get("consistency_report")
         if not isinstance(report, dict):
             continue
@@ -1958,17 +2109,26 @@ async def get_project_quality_dashboard(
         foreshadowing_unresolved = int(foreshadowing_analysis.unresolved_count or 0)
         foreshadowing_quality = float(foreshadowing_analysis.overall_quality_score or 0.0)
     else:
-        foreshadowing_rows = (
+        foreshadowing_stats_row = (
             await session.execute(
-                select(Foreshadowing).where(Foreshadowing.project_id == project_id)
+                select(
+                    func.count(Foreshadowing.id).label("total"),
+                    func.sum(
+                        case(
+                            (
+                                func.lower(func.coalesce(Foreshadowing.status, "")).in_(
+                                    ["resolved", "revealed", "paid_off"]
+                                ),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ).label("resolved"),
+                ).where(Foreshadowing.project_id == project_id)
             )
-        ).scalars().all()
-        foreshadowing_total = len(foreshadowing_rows)
-        foreshadowing_resolved = sum(
-            1
-            for item in foreshadowing_rows
-            if str(item.status or "").strip().lower() in {"resolved", "revealed", "paid_off"}
-        )
+        ).one()
+        foreshadowing_total = int(foreshadowing_stats_row.total or 0)
+        foreshadowing_resolved = int(foreshadowing_stats_row.resolved or 0)
         foreshadowing_unresolved = max(0, foreshadowing_total - foreshadowing_resolved)
         foreshadowing_quality = 0.0
 
@@ -1979,13 +2139,21 @@ async def get_project_quality_dashboard(
     else:
         foreshadowing_score = 75.0
 
-    timeline_rows = (
+    timeline_stats_row = (
         await session.execute(
-            select(TimelineEvent).where(TimelineEvent.project_id == project_id)
+            select(
+                func.count(TimelineEvent.id).label("event_count"),
+                func.sum(
+                    case(
+                        (TimelineEvent.is_turning_point.is_(True), 1),
+                        else_=0,
+                    )
+                ).label("turning_points"),
+            ).where(TimelineEvent.project_id == project_id)
         )
-    ).scalars().all()
-    timeline_event_count = len(timeline_rows)
-    turning_points = sum(1 for item in timeline_rows if bool(item.is_turning_point))
+    ).one()
+    timeline_event_count = int(timeline_stats_row.event_count or 0)
+    turning_points = int(timeline_stats_row.turning_points or 0)
 
     completion_score = round((successful_chapters / total_chapters) * 100, 2) if total_chapters else 100.0
     stability_score = (
@@ -2025,7 +2193,7 @@ async def get_project_quality_dashboard(
     if not recommendations:
         recommendations.append("当前质量状态稳定，可继续扩展章节产能并定期复检。")
 
-    return {
+    payload = {
         "project_id": project_id,
         "generated_at": datetime.utcnow().isoformat(),
         "overall_score": overall_score,
@@ -2060,6 +2228,14 @@ async def get_project_quality_dashboard(
         "top_risks": top_risks,
         "recommendations": recommendations,
     }
+    await _set_ttl_cache_entry(
+        _QUALITY_DASHBOARD_CACHE,
+        key=cache_key,
+        payload=payload,
+        ttl_seconds=QUALITY_DASHBOARD_CACHE_TTL_SECONDS,
+        max_items=QUALITY_DASHBOARD_CACHE_MAX_ITEMS,
+    )
+    return payload
 
 
 @router.put("/{project_id}/factions")

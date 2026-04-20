@@ -390,6 +390,7 @@
             :bordered="false"
             size="small"
             class="log-table"
+            :scroll-x="logTableScrollX"
           />
         </n-card>
         </div>
@@ -507,6 +508,7 @@ const updateLayout = () => {
 const gridCols = computed(() => (isMobile.value ? 1 : 5))
 const summaryGridCols = computed(() => (isMobile.value ? 1 : 4))
 const trendGridCols = computed(() => (isMobile.value ? 1 : 2))
+const logTableScrollX = computed(() => (isMobile.value ? 1560 : 1920))
 
 const taskStatusOptions = [
   { label: '活跃任务', value: 'active' },
@@ -973,8 +975,12 @@ const logColumns: DataTableColumns<LLMCallLog> = [
     title: '错误信息',
     key: 'error_message',
     minWidth: 260,
-    ellipsis: { tooltip: true },
-    render: (row) => row.error_message || '--'
+    render: (row) =>
+      h(
+        'span',
+        { class: 'log-error-message-cell' },
+        row.error_message || '--'
+      )
   }
 ]
 
@@ -1522,6 +1528,19 @@ watch(
 
 .log-table {
   margin-top: 2px;
+}
+
+:deep(.log-table .n-data-table-wrapper) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.log-error-message-cell {
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.35;
 }
 
 :deep(.queue-stale-row td) {
