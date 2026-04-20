@@ -1,6 +1,6 @@
 <!-- AIMETA P=打字机效果_文字动画组件|R=打字动画|NR=不含业务逻辑|E=component:TypewriterEffect|X=internal|A=动画组件|D=vue|S=dom|RD=./README.ai -->
 <template>
-  <h1 class="typewriter text-4xl md:text-5xl font-extrabold text-center text-gray-800 tracking-wider" :style="{ '--char-count': fullText.length }">
+  <h1 class="typewriter md-display-small" :style="{ '--char-count': fullText.length }">
     {{ displayedText }}
   </h1>
 </template>
@@ -36,7 +36,9 @@ onMounted(() => {
   display: inline-block;
   overflow: hidden;
   white-space: nowrap;
-  border-right: 0.1em solid #333; /* Blinking cursor */
+  border-right: 0.1em solid color-mix(in srgb, var(--md-primary) 66%, transparent);
+  color: var(--md-on-surface);
+  text-align: left;
   animation: typing 2s steps(var(--char-count, 10), end), blink-caret 0.75s step-end infinite;
   width: 100%;
 }
@@ -58,7 +60,7 @@ onMounted(() => {
     border-color: transparent;
   }
   50% {
-    border-color: #333;
+    border-color: color-mix(in srgb, var(--md-primary) 66%, transparent);
   }
 }
 </style>

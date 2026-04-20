@@ -1,7 +1,7 @@
 <!-- AIMETA P=聊天气泡_对话消息展示|R=消息气泡|NR=不含输入功能|E=component:ChatBubble|X=internal|A=气泡组件|D=vue|S=dom|RD=./README.ai -->
 <template>
-  <div :class="wrapperClass">
-    <div :class="bubbleClass">
+  <div class="chat-row" :class="{ 'is-user': type === 'user' }">
+    <div class="chat-bubble" :class="type === 'ai' ? 'chat-bubble-ai' : 'chat-bubble-user'">
       <!-- AI 消息支持 markdown 渲染 -->
       <div 
         v-if="type === 'ai'" 
@@ -9,7 +9,7 @@
         v-html="renderedMessage"
       ></div>
       <!-- 用户消息保持原样 -->
-      <div v-else>{{ message }}</div>
+      <div v-else class="chat-user-text">{{ message }}</div>
     </div>
   </div>
 </template>
@@ -42,7 +42,7 @@ const parseMarkdown = (text: string): string => {
   parsed = parsed.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
   
   // 处理选项列表 A) text
-  parsed = parsed.replace(/^([A-Z])\)\s*\*\*(.*?)\*\*(.*)/gm, '<div class="mb-2"><span class="inline-flex items-center justify-center w-6 h-6 bg-indigo-100 text-indigo-600 text-sm font-bold rounded-full mr-2">$1</span><strong>$2</strong>$3</div>')
+  parsed = parsed.replace(/^([A-Z])\)\s*\*\*(.*?)\*\*(.*)/gm, '<div class="chat-option-row"><span class="chat-option-badge">$1</span><strong>$2</strong>$3</div>')
   
   // 处理普通换行
   parsed = parsed.replace(/\n/g, '<br>')
@@ -64,14 +64,54 @@ const renderedMessage = computed(() => {
   }
   return props.message
 })
-
-const wrapperClass = computed(() => {
-  return `w-full flex ${props.type === 'ai' ? 'justify-start' : 'justify-end'}`
-})
-
-const bubbleClass = computed(() => {
-  const baseClass = 'max-w-md lg:max-w-lg p-4 rounded-lg shadow-md fade-in'
-  const typeClass = props.type === 'ai' ? 'chat-bubble-ai' : 'chat-bubble-user'
-  return `${baseClass} ${typeClass}`
-})
 </script>
+
+<style scoped>
+.chat-row {
+  width: 100%;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.chat-row.is-user {
+  justify-content: flex-end;
+}
+
+.chat-bubble {
+  max-width: min(90%, 760px);
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 80%, transparent);
+  box-shadow: var(--md-elevation-1);
+  animation: fadeIn 0.35s var(--md-easing-emphasized);
+}
+
+.chat-user-text {
+  white-space: pre-wrap;
+  line-height: 1.7;
+}
+
+.chat-bubble-ai :deep(.chat-option-row) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chat-bubble-ai :deep(.chat-option-badge) {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--md-primary-container) 78%, #ffffff 22%);
+  color: var(--md-primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.chat-bubble-ai :deep(p) {
+  line-height: 1.7;
+}
+</style>

@@ -1169,7 +1169,7 @@ onUnmounted(() => {
 
 <style scoped>
 :global(body.m3-novel) {
-  --md-font-family: 'Manrope', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', sans-serif;
+  --md-font-family: 'Plus Jakarta Sans', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', sans-serif;
   --md-primary: #2563eb;
   --md-primary-light: #4f7bf2;
   --md-primary-dark: #1d4ed8;

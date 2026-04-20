@@ -1,7 +1,7 @@
 /* AIMETA P=主CSS_全局样式和Tailwind导入|R=全局样式_Tailwind|NR=不含组件样式|E=-|X=internal|A=全局样式|D=tailwindcss|S=dom|RD=./README.ai */
 @import "tailwindcss";
 /* Editorial + Product Font Pair */
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
 @plugin "@tailwindcss/typography";
 
@@ -83,7 +83,8 @@
   --app-section-gap: clamp(14px, 2vw, 24px);
 
   /* Typography Scale */
-  --md-font-family: 'Manrope', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --md-font-family: 'Plus Jakarta Sans', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --md-font-display: 'Plus Jakarta Sans', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --md-font-mono: 'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace;
   
   /* Display */
@@ -171,14 +172,20 @@ body {
   min-height: 100dvh;
   font-family: var(--md-font-family);
   font-size: var(--md-body-medium);
-  line-height: 1.62;
+  line-height: 1.66;
   color: var(--md-on-background);
   background:
-    radial-gradient(1200px 600px at -8% -22%, rgba(29, 78, 216, 0.14), transparent 62%),
-    radial-gradient(880px 460px at 106% -15%, rgba(15, 118, 110, 0.12), transparent 60%),
-    linear-gradient(150deg, #f7faff 0%, #f2f7fd 48%, #eef5fb 100%);
+    radial-gradient(1260px 620px at -8% -24%, rgba(29, 78, 216, 0.16), transparent 62%),
+    radial-gradient(920px 500px at 106% -14%, rgba(15, 118, 110, 0.13), transparent 60%),
+    radial-gradient(700px 360px at 50% -28%, rgba(56, 189, 248, 0.09), transparent 70%),
+    linear-gradient(152deg, #f8fbff 0%, #f1f7fd 49%, #edf6fb 100%);
   margin: 0;
   padding: 0;
+}
+
+#app {
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 ::selection {
@@ -188,9 +195,10 @@ body {
 
 h1, h2, h3, h4, h5, h6 {
   margin: 0;
+  font-family: var(--md-font-display);
   color: var(--md-on-surface);
   font-weight: 700;
-  letter-spacing: -0.012em;
+  letter-spacing: -0.018em;
   line-height: 1.28;
 }
 
@@ -226,39 +234,50 @@ a[href],
    ============================================ */
 .md-display-large {
   font-size: var(--md-display-large);
-  font-weight: 400;
+  font-family: var(--md-font-display);
+  font-weight: 700;
   line-height: 1.12;
-  letter-spacing: -0.25px;
+  letter-spacing: -0.03em;
 }
 
 .md-display-medium {
   font-size: var(--md-display-medium);
-  font-weight: 400;
+  font-family: var(--md-font-display);
+  font-weight: 700;
   line-height: 1.16;
+  letter-spacing: -0.02em;
 }
 
 .md-display-small {
   font-size: var(--md-display-small);
-  font-weight: 400;
+  font-family: var(--md-font-display);
+  font-weight: 700;
   line-height: 1.22;
+  letter-spacing: -0.018em;
 }
 
 .md-headline-large {
   font-size: var(--md-headline-large);
-  font-weight: 400;
+  font-family: var(--md-font-display);
+  font-weight: 650;
   line-height: 1.25;
+  letter-spacing: -0.015em;
 }
 
 .md-headline-medium {
   font-size: var(--md-headline-medium);
-  font-weight: 400;
+  font-family: var(--md-font-display);
+  font-weight: 650;
   line-height: 1.29;
+  letter-spacing: -0.012em;
 }
 
 .md-headline-small {
   font-size: var(--md-headline-small);
-  font-weight: 400;
+  font-family: var(--md-font-display);
+  font-weight: 600;
   line-height: 1.33;
+  letter-spacing: -0.01em;
 }
 
 .md-title-large {
@@ -1920,6 +1939,169 @@ a[href],
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================
+   Legacy Tailwind Color Bridge
+   ============================================ */
+:root {
+  --legacy-indigo-soft: color-mix(in srgb, var(--md-primary-container) 86%, #ffffff 14%);
+  --legacy-indigo-border: color-mix(in srgb, var(--md-primary) 24%, var(--md-outline) 76%);
+  --legacy-purple-soft: color-mix(in srgb, var(--md-secondary-container) 72%, #ffffff 28%);
+  --legacy-purple-strong: color-mix(in srgb, var(--md-secondary) 82%, var(--md-primary) 18%);
+}
+
+.text-indigo-500,
+.text-indigo-600,
+.text-indigo-700,
+.text-indigo-800,
+.text-indigo-900 {
+  color: var(--md-primary) !important;
+}
+
+.text-purple-500,
+.text-purple-600,
+.text-purple-700,
+.text-purple-800 {
+  color: var(--md-secondary-dark) !important;
+}
+
+.bg-indigo-50,
+.bg-indigo-100 {
+  background-color: var(--legacy-indigo-soft) !important;
+}
+
+.bg-indigo-500,
+.bg-indigo-600,
+.bg-indigo-700 {
+  background-color: var(--md-primary) !important;
+}
+
+.bg-purple-50,
+.bg-purple-100 {
+  background-color: var(--legacy-purple-soft) !important;
+}
+
+.bg-purple-500,
+.bg-purple-600 {
+  background-color: var(--legacy-purple-strong) !important;
+}
+
+.border-indigo-100,
+.border-indigo-200,
+.border-indigo-300,
+.border-indigo-500 {
+  border-color: var(--legacy-indigo-border) !important;
+}
+
+.border-purple-100,
+.border-purple-200,
+.border-purple-300,
+.border-purple-500 {
+  border-color: color-mix(in srgb, var(--md-secondary) 24%, var(--md-outline) 76%) !important;
+}
+
+.ring-indigo-300,
+.ring-indigo-400,
+.ring-indigo-500 {
+  --tw-ring-color: color-mix(in srgb, var(--md-primary) 34%, transparent) !important;
+}
+
+.ring-purple-300,
+.ring-purple-500 {
+  --tw-ring-color: color-mix(in srgb, var(--md-secondary) 30%, transparent) !important;
+}
+
+.focus\:ring-indigo-300:focus,
+.focus\:ring-indigo-400:focus,
+.focus\:ring-indigo-500:focus {
+  --tw-ring-color: color-mix(in srgb, var(--md-primary) 34%, transparent) !important;
+}
+
+.focus\:ring-purple-300:focus,
+.focus\:ring-purple-500:focus {
+  --tw-ring-color: color-mix(in srgb, var(--md-secondary) 30%, transparent) !important;
+}
+
+.focus\:border-indigo-500:focus,
+.hover\:border-indigo-300:hover,
+.hover\:border-indigo-500:hover {
+  border-color: var(--legacy-indigo-border) !important;
+}
+
+.focus\:border-purple-500:focus,
+.hover\:border-purple-300:hover,
+.hover\:border-purple-500:hover {
+  border-color: color-mix(in srgb, var(--md-secondary) 24%, var(--md-outline) 76%) !important;
+}
+
+.hover\:bg-indigo-50:hover,
+.hover\:bg-indigo-100:hover,
+.hover\:bg-indigo-600:hover,
+.hover\:bg-indigo-700:hover {
+  background-color: color-mix(in srgb, var(--md-primary-container) 70%, var(--md-surface) 30%) !important;
+}
+
+.hover\:bg-purple-100:hover,
+.hover\:bg-purple-600:hover,
+.hover\:bg-purple-700:hover {
+  background-color: color-mix(in srgb, var(--md-secondary-container) 72%, var(--md-surface) 28%) !important;
+}
+
+.hover\:text-indigo-600:hover,
+.hover\:text-indigo-800:hover {
+  color: var(--md-primary-dark) !important;
+}
+
+.hover\:text-purple-600:hover,
+.hover\:text-purple-800:hover {
+  color: var(--md-secondary-dark) !important;
+}
+
+.from-indigo-500,
+.from-indigo-600 {
+  --tw-gradient-from: var(--md-primary) var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: color-mix(in srgb, var(--md-primary) 0%, transparent) var(--tw-gradient-to-position) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+}
+
+.to-indigo-600,
+.to-indigo-700 {
+  --tw-gradient-to: var(--md-primary-dark) var(--tw-gradient-to-position) !important;
+}
+
+.from-purple-500,
+.from-purple-600 {
+  --tw-gradient-from: color-mix(in srgb, var(--md-secondary) 80%, var(--md-primary) 20%) var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: color-mix(in srgb, var(--md-secondary) 0%, transparent) var(--tw-gradient-to-position) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+}
+
+.to-purple-600,
+.to-purple-700 {
+  --tw-gradient-to: color-mix(in srgb, var(--md-secondary-dark) 84%, var(--md-primary-dark) 16%) var(--tw-gradient-to-position) !important;
+}
+
+/* ============================================
+   Naive UI Polish
+   ============================================ */
+.admin-shell :where(.n-card) {
+  border-radius: var(--md-radius-lg);
+}
+
+.admin-shell :where(.n-card .n-card-header) {
+  padding-top: 18px;
+  padding-bottom: 14px;
+}
+
+.admin-shell :where(.n-base-selection .n-base-selection-label),
+.admin-shell :where(.n-input .n-input-wrapper),
+.admin-shell :where(.n-input-number .n-input-wrapper) {
+  border-radius: 12px;
+}
+
+.admin-shell :where(.n-data-table .n-data-table-th) {
+  font-weight: 700;
 }
 
 /* ============================================
