@@ -170,6 +170,51 @@
           </n-gi>
         </n-grid>
 
+        <n-card :bordered="false" size="small" class="section-card">
+          <template #header>
+            <div class="section-title">任务失败告警</div>
+          </template>
+          <n-space vertical size="small">
+            <div class="budget-meta">
+              开关：{{ taskAlerts?.enabled ? '开启' : '关闭' }} /
+              窗口：{{ taskAlerts?.window_hours ?? filters.hours }}h /
+              失败率：{{ Number(taskAlerts?.snapshot?.failure_rate_percent ?? 0).toFixed(2) }}%
+            </div>
+            <div class="queue-summary-row">
+              <n-tag size="small" type="info" bordered>
+                近窗完成 {{ taskAlerts?.snapshot?.finished_recent_count ?? 0 }}
+              </n-tag>
+              <n-tag size="small" type="error" bordered>
+                近窗失败 {{ taskAlerts?.snapshot?.failed_recent_count ?? 0 }}
+              </n-tag>
+              <n-tag size="small" type="warning" bordered>
+                超时 {{ taskAlerts?.snapshot?.timeout_recent_count ?? 0 }}
+              </n-tag>
+              <n-tag size="small" type="error" bordered>
+                卡住 {{ taskAlerts?.snapshot?.stale_running_count ?? 0 }}
+              </n-tag>
+            </div>
+            <n-space :size="8">
+              <n-tag
+                v-for="channel in taskAlerts?.channels || []"
+                :key="channel.channel"
+                :type="channel.enabled ? 'success' : (channel.configured ? 'warning' : 'default')"
+                bordered
+                size="small"
+              >
+                {{ channel.channel }}：{{ channel.enabled ? '已启用' : (channel.configured ? '未启用' : '未配置') }}
+              </n-tag>
+            </n-space>
+            <n-data-table
+              :columns="taskAlertIssueColumns"
+              :data="taskAlerts?.issues || []"
+              :pagination="{ pageSize: 6 }"
+              :bordered="false"
+              size="small"
+            />
+          </n-space>
+        </n-card>
+
         <n-grid :cols="trendGridCols" :x-gap="12" :y-gap="12" class="section-grid">
           <n-gi>
             <n-card :bordered="false" size="small" class="section-card">
@@ -387,6 +432,8 @@ import {
   type LLMCallSummary,
   type LLMErrorTopItem,
   type LLMGroupedTrendResponse,
+  type WriterTaskAlertIssue,
+  type WriterTaskAlertResponse,
   type WriterTaskFailureTopItem,
   type WriterTaskQueueItem,
   type WriterTaskQueueResponse
@@ -414,6 +461,7 @@ const trendByUser = ref<LLMGroupedTrendResponse | null>(null)
 const errorTop = ref<LLMErrorTopItem[]>([])
 const budgetAlerts = ref<LLMBudgetAlertResponse | null>(null)
 const taskQueue = ref<WriterTaskQueueResponse | null>(null)
+const taskAlerts = ref<WriterTaskAlertResponse | null>(null)
 const queueLoading = ref(false)
 const isMobile = ref(false)
 const modelTrendCanvas = ref<HTMLCanvasElement | null>(null)
@@ -1178,6 +1226,47 @@ const queueFailureColumns: DataTableColumns<WriterTaskFailureTopItem> = [
   }
 ]
 
+const taskAlertLevelType = (level: string): 'success' | 'warning' | 'error' | 'default' => {
+  if (level === 'critical') return 'error'
+  if (level === 'warning') return 'warning'
+  if (level === 'info') return 'success'
+  return 'default'
+}
+
+const taskAlertIssueColumns: DataTableColumns<WriterTaskAlertIssue> = [
+  {
+    title: '等级',
+    key: 'level',
+    width: 80,
+    align: 'center',
+    render: (row) =>
+      h(
+        NTag,
+        { type: taskAlertLevelType(row.level), bordered: true, size: 'small' },
+        { default: () => row.level }
+      )
+  },
+  {
+    title: '指标',
+    key: 'label',
+    width: 150,
+    ellipsis: { tooltip: true }
+  },
+  {
+    title: '说明',
+    key: 'message',
+    minWidth: 260,
+    ellipsis: { tooltip: true }
+  },
+  {
+    title: '建议',
+    key: 'suggestion',
+    minWidth: 240,
+    ellipsis: { tooltip: true },
+    render: (row) => row.suggestion || '—'
+  }
+]
+
 const fetchQueueOnly = async () => {
   queueLoading.value = true
   try {
@@ -1198,7 +1287,7 @@ const fetchData = async () => {
   loading.value = true
   error.value = null
   try {
-    const [summaryData, logsData, modelTrend, userTrend, errorTopData, budgetData, queueData] = await Promise.all([
+    const [summaryData, logsData, modelTrend, userTrend, errorTopData, budgetData, queueData, taskAlertData] = await Promise.all([
       AdminAPI.getLLMCallSummary(
         filters.hours,
         filters.status_filter || undefined,
@@ -1249,6 +1338,9 @@ const fetchData = async () => {
         status_group: taskStatusGroup.value,
         project_id: filters.project_id || undefined,
         user_id: queueUserId.value ?? undefined
+      }),
+      AdminAPI.getWriterTaskAlerts({
+        window_hours: filters.hours
       })
     ])
 
@@ -1259,6 +1351,7 @@ const fetchData = async () => {
     errorTop.value = errorTopData
     budgetAlerts.value = budgetData
     taskQueue.value = queueData
+    taskAlerts.value = taskAlertData
     await refreshTrendCharts()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '获取 LLM 观测数据失败'

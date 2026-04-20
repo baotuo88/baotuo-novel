@@ -36,6 +36,7 @@ from ...services.blueprint_generation_service import (
     generate_blueprint_for_project,
 )
 from ...services.generation_task_runner import generation_task_runner
+from ...services.generation_submit_policy_service import GenerationSubmitPolicyService
 from ...services.generation_task_service import (
     TASK_STATUS_CANCELED,
     TASK_STATUS_COMPLETED,
@@ -386,6 +387,7 @@ async def generate_blueprint_async(
     """异步触发蓝图生成，立即返回任务受理状态。"""
     novel_service = NovelService(session)
     task_service = GenerationTaskService(session)
+    submit_policy_service = GenerationSubmitPolicyService(session)
     project = await novel_service.ensure_project_owner(project_id, current_user.id)
 
     # 先做基础校验，避免提交无效任务
@@ -405,6 +407,12 @@ async def generate_blueprint_async(
             message="蓝图正在生成中，请稍后刷新状态",
             poll_interval_seconds=_resolve_blueprint_poll_interval_seconds(),
         )
+
+    await submit_policy_service.ensure_submit_allowed(
+        user_id=int(current_user.id),
+        project_id=project_id,
+        task_type=TASK_TYPE_BLUEPRINT_GENERATION,
+    )
 
     project.status = "blueprint_generating"
     await session.commit()

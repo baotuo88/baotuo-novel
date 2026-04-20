@@ -71,6 +71,7 @@ from ...services.chapter_guardrails import ChapterGuardrails
 from ...services.ai_review_service import AIReviewService
 from ...services.finalize_service import FinalizeService
 from ...services.generation_task_runner import generation_task_runner
+from ...services.generation_submit_policy_service import GenerationSubmitPolicyService
 from ...services.generation_task_service import (
     ACTIVE_TASK_STATUSES,
     FAILED_TASK_STATUSES,
@@ -1015,6 +1016,7 @@ async def retry_writer_task(
 ) -> WriterTaskCenterRetryResponse:
     novel_service = NovelService(session)
     task_service = GenerationTaskService(session)
+    submit_policy_service = GenerationSubmitPolicyService(session)
     await novel_service.ensure_project_owner(project_id, current_user.id)
     request_id = _request_id_from_request(request)
     submit_lock = _chapter_submit_lock(project_id, chapter_number)
@@ -1041,6 +1043,14 @@ async def retry_writer_task(
 
         if previous_status not in _WRITER_FAILED_STATUSES and not payload.force:
             raise HTTPException(status_code=400, detail="当前任务不是失败状态，若要重试请开启 force")
+
+        excluded_task_ids = [active_task.id] if active_task else None
+        await submit_policy_service.ensure_submit_allowed(
+            user_id=int(current_user.id),
+            project_id=project_id,
+            task_type=TASK_TYPE_CHAPTER_GENERATION,
+            exclude_task_ids=excluded_task_ids,
+        )
 
         latest_failed_task = await task_service.get_latest_task(
             project_id=project_id,
@@ -1118,6 +1128,7 @@ async def generate_chapter(
 ) -> NovelProjectSchema:
     novel_service = NovelService(session)
     task_service = GenerationTaskService(session)
+    submit_policy_service = GenerationSubmitPolicyService(session)
     await novel_service.ensure_project_owner(project_id, current_user.id)
     request_id = _request_id_from_request(request)
     chapter_number = payload.chapter_number
@@ -1143,6 +1154,12 @@ async def generate_chapter(
                 request_id,
             )
             return await _load_project_schema(novel_service, project_id, current_user.id)
+
+        await submit_policy_service.ensure_submit_allowed(
+            user_id=int(current_user.id),
+            project_id=project_id,
+            task_type=TASK_TYPE_CHAPTER_GENERATION,
+        )
 
         chapter = await novel_service.get_or_create_chapter(project_id, chapter_number)
         if chapter.status == ChapterGenerationStatus.GENERATING.value:

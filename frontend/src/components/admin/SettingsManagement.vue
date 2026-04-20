@@ -194,6 +194,43 @@
     </n-card>
       </n-tab-pane>
 
+      <n-tab-pane name="health" tab="配置自检">
+        <n-card :bordered="false">
+          <template #header>
+            <div class="card-header">
+              <span class="card-title">配置自检中心</span>
+              <n-space :size="8">
+                <n-button quaternary size="small" :loading="healthLoading" @click="fetchConfigHealth(false)">
+                  快速检查
+                </n-button>
+                <n-button type="primary" size="small" :loading="healthLoading" @click="fetchConfigHealth(true)">
+                  执行连通测试
+                </n-button>
+              </n-space>
+            </div>
+          </template>
+          <n-spin :show="healthLoading">
+            <n-alert v-if="healthError" type="error" closable @close="healthError = null">
+              {{ healthError }}
+            </n-alert>
+            <n-space v-if="healthData" class="health-summary" :size="8">
+              <n-tag :type="healthLevelTagType(healthData.overall_level)" bordered>
+                总体：{{ healthData.overall_level }}
+              </n-tag>
+              <n-tag type="success" bordered>通过 {{ healthData.pass_count }}</n-tag>
+              <n-tag type="warning" bordered>警告 {{ healthData.warn_count }}</n-tag>
+              <n-tag type="error" bordered>失败 {{ healthData.fail_count }}</n-tag>
+            </n-space>
+            <n-data-table
+              :columns="healthColumns"
+              :data="healthData?.items || []"
+              :bordered="false"
+              size="small"
+            />
+          </n-spin>
+        </n-card>
+      </n-tab-pane>
+
       <n-tab-pane name="config" tab="系统配置">
 
     <n-card :bordered="false">
@@ -326,6 +363,7 @@ import {
   NSelect,
   NSpace,
   NSpin,
+  NTag,
   NTabPane,
   NTabs,
   type DataTableColumns,
@@ -336,6 +374,8 @@ import {
   AdminAPI,
   type AdminNovelSummary,
   type AdminUser,
+  type ConfigHealthItem,
+  type ConfigHealthResponse,
   type DailyRequestLimit,
   type SystemConfig,
   type SystemConfigUpdatePayload,
@@ -354,7 +394,10 @@ const configs = ref<SystemConfig[]>([])
 const configLoading = ref(false)
 const configSaving = ref(false)
 const configError = ref<string | null>(null)
-const activeSection = ref<'quota' | 'override' | 'config'>('quota')
+const activeSection = ref<'quota' | 'override' | 'health' | 'config'>('quota')
+const healthLoading = ref(false)
+const healthError = ref<string | null>(null)
+const healthData = ref<ConfigHealthResponse | null>(null)
 
 const policySaving = ref(false)
 const policyError = ref<string | null>(null)
@@ -513,6 +556,120 @@ const policyFields: PolicyField[] = [
     defaultValue: '0.5,0.8,1.0',
     type: 'text',
     placeholder: '例如：0.5,0.8,1.0'
+  },
+  {
+    key: 'generation.submit.max_running_per_user',
+    label: '单用户运行上限',
+    description: '单用户允许同时运行中的生成任务上限，0 表示不限制',
+    defaultValue: '2',
+    type: 'number',
+    min: 0,
+    max: 64,
+    integer: true,
+    placeholder: '0-64'
+  },
+  {
+    key: 'generation.submit.max_running_per_project',
+    label: '单项目运行上限',
+    description: '单项目允许同时运行中的生成任务上限，0 表示不限制',
+    defaultValue: '2',
+    type: 'number',
+    min: 0,
+    max: 64,
+    integer: true,
+    placeholder: '0-64'
+  },
+  {
+    key: 'generation.submit.max_queued_per_user',
+    label: '单用户排队上限',
+    description: '单用户允许排队中的生成任务上限，0 表示不限制',
+    defaultValue: '30',
+    type: 'number',
+    min: 0,
+    max: 500,
+    integer: true,
+    placeholder: '0-500'
+  },
+  {
+    key: 'generation.submit.max_queued_per_project',
+    label: '单项目排队上限',
+    description: '单项目允许排队中的生成任务上限，0 表示不限制',
+    defaultValue: '20',
+    type: 'number',
+    min: 0,
+    max: 500,
+    integer: true,
+    placeholder: '0-500'
+  },
+  {
+    key: 'generation.alert.enabled',
+    label: '失败告警开关',
+    description: '是否启用任务失败自动告警',
+    defaultValue: 'true',
+    type: 'select',
+    options: [
+      { label: '开启 (true)', value: 'true' },
+      { label: '关闭 (false)', value: 'false' }
+    ]
+  },
+  {
+    key: 'generation.alert.cooldown_seconds',
+    label: '告警冷却秒数',
+    description: '相同类型失败告警的最短发送间隔（秒）',
+    defaultValue: '600',
+    type: 'number',
+    min: 0,
+    max: 86400,
+    integer: true,
+    placeholder: '0-86400'
+  },
+  {
+    key: 'generation.alert.failure_rate_threshold_percent',
+    label: '失败率阈值(%)',
+    description: '最近窗口失败率超过该值时触发告警',
+    defaultValue: '20',
+    type: 'number',
+    min: 0,
+    max: 100,
+    placeholder: '0-100'
+  },
+  {
+    key: 'generation.alert.stale_running_threshold',
+    label: '卡住任务阈值',
+    description: '运行中卡住任务数量达到该值时触发告警',
+    defaultValue: '1',
+    type: 'number',
+    min: 0,
+    max: 10000,
+    integer: true,
+    placeholder: '0-10000'
+  },
+  {
+    key: 'generation.alert.queue_backlog_threshold',
+    label: '排队积压阈值',
+    description: '排队任务数量达到该值时触发告警',
+    defaultValue: '50',
+    type: 'number',
+    min: 0,
+    max: 10000,
+    integer: true,
+    placeholder: '0-10000'
+  },
+  {
+    key: 'generation.alert.webhook_url',
+    label: '告警 Webhook',
+    description: '任务失败告警推送地址，可留空',
+    defaultValue: '',
+    type: 'text',
+    placeholder: 'https://example.com/webhook'
+  },
+  {
+    key: 'generation.alert.email_to',
+    label: '告警邮箱',
+    description: '任务失败告警接收邮箱，可留空',
+    defaultValue: '',
+    type: 'text',
+    placeholder: 'admin@example.com'
   }
 ]
 
@@ -975,6 +1132,41 @@ const fetchConfigs = async () => {
   }
 }
 
+const healthLevelTagType = (level?: string): 'success' | 'warning' | 'error' | 'default' => {
+  if (level === 'pass') return 'success'
+  if (level === 'warn') return 'warning'
+  if (level === 'fail') return 'error'
+  return 'default'
+}
+
+const summarizeHealthDetails = (details?: Record<string, any>) => {
+  if (!details) return '—'
+  const entries = Object.entries(details).filter(([, value]) => value !== null && value !== '' && value !== undefined)
+  if (entries.length === 0) return '—'
+  return entries
+    .slice(0, 4)
+    .map(([key, value]) => {
+      if (Array.isArray(value)) return `${key}: ${value.join(', ')}`
+      if (typeof value === 'object') return `${key}: [object]`
+      return `${key}: ${String(value)}`
+    })
+    .join('；')
+}
+
+const fetchConfigHealth = async (runConnectivity = false) => {
+  healthLoading.value = true
+  healthError.value = null
+  try {
+    healthData.value = await AdminAPI.getConfigHealth({
+      run_connectivity: runConnectivity
+    })
+  } catch (err) {
+    healthError.value = err instanceof Error ? err.message : '配置自检失败'
+  } finally {
+    healthLoading.value = false
+  }
+}
+
 const loadPolicyConfigsFromList = (list: SystemConfig[]) => {
   const map = new Map(list.map((item) => [item.key, item.value]))
   policyFields.forEach((field) => {
@@ -1275,12 +1467,46 @@ const columns: DataTableColumns<SystemConfig> = [
   }
 ]
 
+const healthColumns: DataTableColumns<ConfigHealthItem> = [
+  {
+    title: '状态',
+    key: 'level',
+    width: 84,
+    align: 'center',
+    render: (row) => h(
+      NTag,
+      { type: healthLevelTagType(row.level), bordered: true, size: 'small' },
+      { default: () => row.level }
+    )
+  },
+  {
+    title: '检查项',
+    key: 'label',
+    width: 140,
+    ellipsis: { tooltip: true }
+  },
+  {
+    title: '结果',
+    key: 'message',
+    minWidth: 300,
+    ellipsis: { tooltip: true }
+  },
+  {
+    title: '详情',
+    key: 'details',
+    minWidth: 260,
+    ellipsis: { tooltip: true },
+    render: (row) => summarizeHealthDetails(row.details)
+  }
+]
+
 onMounted(() => {
   updateLayout()
   window.addEventListener('resize', updateLayout)
   fetchDailyLimit()
   fetchConfigs()
   fetchOverrideReferences()
+  fetchConfigHealth(false)
 })
 
 onBeforeUnmount(() => {
@@ -1358,6 +1584,10 @@ onBeforeUnmount(() => {
   margin-top: 12px;
   display: flex;
   justify-content: flex-end;
+}
+
+.health-summary {
+  margin-bottom: 12px;
 }
 
 @media (max-width: 767px) {

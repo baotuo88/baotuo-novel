@@ -224,6 +224,36 @@ SYSTEM_CONFIG_DEFAULTS: list[SystemConfigDefault] = [
         description="一致性守护单次自动修复最多处理的冲突数量。",
     ),
     SystemConfigDefault(
+        key="generation.submit.max_running_per_user",
+        value_getter=lambda _config: "2",
+        description="单用户允许同时运行中的生成任务上限，0 表示关闭限制。",
+    ),
+    SystemConfigDefault(
+        key="generation.submit.max_running_per_project",
+        value_getter=lambda _config: "2",
+        description="单项目允许同时运行中的生成任务上限，0 表示关闭限制。",
+    ),
+    SystemConfigDefault(
+        key="generation.submit.max_queued_per_user",
+        value_getter=lambda _config: "30",
+        description="单用户允许排队中的生成任务上限，0 表示关闭限制。",
+    ),
+    SystemConfigDefault(
+        key="generation.submit.max_queued_per_project",
+        value_getter=lambda _config: "20",
+        description="单项目允许排队中的生成任务上限，0 表示关闭限制。",
+    ),
+    SystemConfigDefault(
+        key="generation.submit.max_running_blueprint_per_user",
+        value_getter=lambda _config: "1",
+        description="单用户蓝图生成任务并发上限，0 表示关闭限制。",
+    ),
+    SystemConfigDefault(
+        key="generation.submit.max_running_chapter_per_project",
+        value_getter=lambda _config: "1",
+        description="单项目章节生成任务并发上限，0 表示关闭限制。",
+    ),
+    SystemConfigDefault(
         key="generation.task.worker_count",
         value_getter=lambda config: _to_optional_str(config.generation_task_workers),
         description="任务执行 worker 数量（运行中修改需重启服务生效）。",
@@ -272,6 +302,51 @@ SYSTEM_CONFIG_DEFAULTS: list[SystemConfigDefault] = [
         key="generation.task.policy_refresh_interval_seconds",
         value_getter=lambda config: _to_optional_str(config.generation_task_policy_refresh_interval_seconds),
         description="任务策略热更新刷新周期（秒）。",
+    ),
+    SystemConfigDefault(
+        key="generation.alert.enabled",
+        value_getter=lambda _config: "true",
+        description="是否启用任务失败自动告警。",
+    ),
+    SystemConfigDefault(
+        key="generation.alert.webhook_url",
+        value_getter=lambda _config: "",
+        description="任务失败告警 webhook 地址（可选）。",
+    ),
+    SystemConfigDefault(
+        key="generation.alert.webhook_timeout_seconds",
+        value_getter=lambda _config: "6",
+        description="任务告警 webhook 超时时间（秒）。",
+    ),
+    SystemConfigDefault(
+        key="generation.alert.email_to",
+        value_getter=lambda _config: "",
+        description="任务失败告警接收邮箱（可选）。",
+    ),
+    SystemConfigDefault(
+        key="generation.alert.smtp_subject_prefix",
+        value_getter=lambda _config: "[宝拓小说]",
+        description="任务告警邮件主题前缀。",
+    ),
+    SystemConfigDefault(
+        key="generation.alert.cooldown_seconds",
+        value_getter=lambda _config: "600",
+        description="相同失败告警的最短发送间隔（秒）。",
+    ),
+    SystemConfigDefault(
+        key="generation.alert.failure_rate_threshold_percent",
+        value_getter=lambda _config: "20",
+        description="最近窗口失败率告警阈值（百分比）。",
+    ),
+    SystemConfigDefault(
+        key="generation.alert.stale_running_threshold",
+        value_getter=lambda _config: "1",
+        description="运行中卡住任务数量告警阈值。",
+    ),
+    SystemConfigDefault(
+        key="generation.alert.queue_backlog_threshold",
+        value_getter=lambda _config: "50",
+        description="排队任务积压数量告警阈值。",
     ),
     SystemConfigDefault(
         key="embedding.provider",

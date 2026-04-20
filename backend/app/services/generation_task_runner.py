@@ -24,6 +24,7 @@ from .generation_task_service import (
     TASK_TYPE_CHAPTER_GENERATION,
     GenerationTaskService,
 )
+from .generation_alert_service import GenerationAlertService
 from .llm_service import LLMService
 from .novel_service import NovelService
 from .pipeline_orchestrator import PipelineOrchestrator
@@ -895,6 +896,41 @@ class GenerationTaskRunner:
         )
         failure_label = failure_category_label(failure_category)
 
+        async def _notify_failure() -> None:
+            if not task_type or not project_id:
+                return
+            try:
+                async with AsyncSessionLocal() as session:
+                    alert_service = GenerationAlertService(session)
+                    alert_result = await alert_service.notify_task_failure(
+                        task_id=task_id,
+                        task_type=task_type,
+                        project_id=project_id,
+                        chapter_number=chapter_number,
+                        user_id=user_id,
+                        stage_label=stage_label,
+                        error_message=error_message,
+                        request_id=request_id,
+                    )
+                if alert_result.get("sent"):
+                    logger.warning(
+                        "任务失败告警已发送: task_id=%s type=%s project=%s chapter=%s channels=%s",
+                        task_id,
+                        task_type,
+                        project_id,
+                        chapter_number,
+                        ",".join(alert_result.get("channels") or []),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "任务失败告警发送异常: task_id=%s type=%s project=%s chapter=%s error=%s",
+                    task_id,
+                    task_type,
+                    project_id,
+                    chapter_number,
+                    exc,
+                )
+
         retry_plan = await self._prepare_auto_retry(task_id)
         if retry_plan:
             retry_task_id, backoff_seconds, retry_attempt, retry_max = retry_plan
@@ -923,6 +959,7 @@ class GenerationTaskRunner:
                 backoff_seconds,
                 (error_message or "")[:220],
             )
+            await _notify_failure()
             return
 
         await self._mark_task_failed(
@@ -942,6 +979,7 @@ class GenerationTaskRunner:
             failure_category,
             (error_message or "")[:240],
         )
+        await _notify_failure()
 
     async def _run_chapter_task(
         self,

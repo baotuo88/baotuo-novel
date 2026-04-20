@@ -5,15 +5,19 @@ import csv
 import io
 import math
 import os
+import smtplib
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Literal, Optional
 from uuid import uuid4
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...core.config import settings
 from ...core.dependencies import get_current_admin
 from ...db.session import AsyncSessionLocal, get_session
 from ...models import (
@@ -37,6 +41,12 @@ from ...schemas.admin import (
     LLMCallSummary,
     LLMBudgetAlertItem,
     LLMBudgetAlertResponse,
+    ConfigHealthItem,
+    ConfigHealthResponse,
+    WriterTaskAlertIssue,
+    WriterTaskAlertChannelStatus,
+    WriterTaskAlertSnapshot,
+    WriterTaskAlertResponse,
     WriterTaskQueueItem,
     WriterTaskQueueSummary,
     WriterTaskFailureTopItem,
@@ -79,11 +89,13 @@ from ...schemas.user import (
 from ...services.auth_service import AuthService
 from ...services.admin_setting_service import AdminSettingService
 from ...services.config_service import ConfigService
+from ...services.llm_config_service import LLMConfigService
 from ...services.novel_service import NovelService
 from ...services.prompt_service import PromptService
 from ...services.update_log_service import UpdateLogService
 from ...services.user_service import UserService
 from ...services.user_subscription_service import UserSubscriptionService
+from ...services.generation_alert_service import GenerationAlertService
 from ...services.generation_task_service import (
     TASK_STATUS_CANCELED,
     TASK_STATUS_COMPLETED,
@@ -191,6 +203,25 @@ def _parse_positive_float(raw_value: Optional[str], default: float = 0.0) -> flo
         return max(0.0, float(str(raw_value).strip()))
     except Exception:
         return default
+
+
+def _parse_bool(raw_value: Optional[str], default: bool = False) -> bool:
+    if raw_value is None:
+        return default
+    normalized = str(raw_value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _parse_clamped_int(raw_value: Optional[str], *, default: int, min_value: int, max_value: int) -> int:
+    try:
+        value = int(str(raw_value).strip()) if raw_value is not None else default
+    except Exception:
+        value = default
+    return max(min_value, min(max_value, value))
 
 
 def _parse_thresholds(raw_value: Optional[str]) -> tuple[float, float]:
@@ -926,6 +957,603 @@ async def get_llm_budget_alerts(
         global_alert=global_alert,
         users=user_alerts,
         projects=project_alerts,
+    )
+
+
+@router.get("/config-health", response_model=ConfigHealthResponse)
+async def get_config_health(
+    run_connectivity: bool = True,
+    webhook_url: Optional[str] = None,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(get_current_admin),
+) -> ConfigHealthResponse:
+    keys = [
+        "llm.api_key",
+        "llm.base_url",
+        "llm.model",
+        "smtp.server",
+        "smtp.port",
+        "smtp.username",
+        "smtp.password",
+        "smtp.from",
+        "auth.allow_registration",
+        "auth.linuxdo_enabled",
+        "linuxdo.client_id",
+        "linuxdo.client_secret",
+        "linuxdo.redirect_uri",
+        "linuxdo.auth_url",
+        "linuxdo.token_url",
+        "linuxdo.user_info_url",
+        "generation.task.worker_count",
+        "generation.submit.max_running_per_user",
+        "generation.submit.max_running_per_project",
+        "generation.submit.max_queued_per_user",
+        "generation.submit.max_queued_per_project",
+        "generation.submit.max_running_blueprint_per_user",
+        "generation.submit.max_running_chapter_per_project",
+        "generation.alert.webhook_url",
+        "generation.alert.email_to",
+        "generation.alert.enabled",
+    ]
+    config_rows = (
+        await session.execute(
+            select(SystemConfig.key, SystemConfig.value).where(SystemConfig.key.in_(keys))
+        )
+    ).all()
+    config_map = {str(key): str(value or "") for key, value in config_rows}
+
+    items: list[ConfigHealthItem] = []
+
+    def _append_item(
+        *,
+        key: str,
+        label: str,
+        level: Literal["pass", "warn", "fail"],
+        message: str,
+        details: Optional[dict[str, Any]] = None,
+    ) -> None:
+        items.append(
+            ConfigHealthItem(
+                key=key,
+                label=label,
+                level=level,
+                message=message,
+                details=details or {},
+                checked_at=datetime.utcnow(),
+            )
+        )
+
+    secret_key_len = len(str(settings.secret_key or "").strip())
+    admin_password_default = settings.admin_default_password == "ChangeMe123!"
+    security_level: Literal["pass", "warn", "fail"] = "pass"
+    security_messages: list[str] = []
+    if secret_key_len < 24:
+        security_level = "fail"
+        security_messages.append("SECRET_KEY 长度不足（建议至少 24 位）")
+    if admin_password_default:
+        security_level = "warn" if security_level == "pass" else security_level
+        security_messages.append("默认管理员密码仍为初始值")
+    if not security_messages:
+        security_messages.append("安全基础配置正常")
+    _append_item(
+        key="security.baseline",
+        label="安全基线",
+        level=security_level,
+        message="；".join(security_messages),
+        details={
+            "secret_key_length": secret_key_len,
+            "admin_default_password_unchanged": admin_password_default,
+        },
+    )
+
+    llm_api_key = str(config_map.get("llm.api_key") or settings.openai_api_key or "").strip()
+    llm_base_url = str(config_map.get("llm.base_url") or (settings.openai_base_url or "")).strip() or None
+    llm_model = str(config_map.get("llm.model") or settings.openai_model_name or "").strip() or None
+    if not llm_api_key:
+        _append_item(
+            key="llm.connectivity",
+            label="LLM 连通性",
+            level="fail",
+            message="未配置 llm.api_key，系统模型调用不可用",
+            details={"model": llm_model, "base_url": llm_base_url},
+        )
+    elif not run_connectivity:
+        _append_item(
+            key="llm.connectivity",
+            label="LLM 连通性",
+            level="pass",
+            message="LLM 配置已存在（未执行在线连通测试）",
+            details={"model": llm_model, "base_url": llm_base_url},
+        )
+    else:
+        llm_probe = await LLMConfigService(session).test_connection(
+            api_key=llm_api_key,
+            base_url=llm_base_url,
+            model=llm_model,
+        )
+        _append_item(
+            key="llm.connectivity",
+            label="LLM 连通性",
+            level="pass" if bool(llm_probe.get("success")) else "fail",
+            message=str(llm_probe.get("message") or "LLM 连通性检测完成"),
+            details={
+                "provider": llm_probe.get("provider"),
+                "latency_ms": llm_probe.get("latency_ms"),
+                "model_count": llm_probe.get("model_count"),
+                "sample_models": llm_probe.get("sample_models"),
+            },
+        )
+
+    smtp_required_keys = ["smtp.server", "smtp.port", "smtp.username", "smtp.password", "smtp.from"]
+    smtp_values = {key: str(config_map.get(key) or "").strip() for key in smtp_required_keys}
+    missing_smtp_keys = [key for key, value in smtp_values.items() if not value]
+    allow_registration = _parse_bool(config_map.get("auth.allow_registration"), settings.allow_registration)
+    smtp_probe_ok = False
+    smtp_probe_detail = ""
+    if missing_smtp_keys:
+        smtp_level: Literal["pass", "warn", "fail"] = "fail" if allow_registration else "warn"
+        _append_item(
+            key="smtp.connectivity",
+            label="SMTP 连通性",
+            level=smtp_level,
+            message=(
+                "SMTP 配置缺失，无法发送邮件验证码"
+                if allow_registration
+                else "SMTP 配置缺失（当前未开启注册可接受）"
+            ),
+            details={"missing_keys": missing_smtp_keys},
+        )
+    elif not run_connectivity:
+        smtp_probe_ok = True
+        _append_item(
+            key="smtp.connectivity",
+            label="SMTP 连通性",
+            level="pass",
+            message="SMTP 配置完整（未执行在线连通测试）",
+            details={"server": smtp_values["smtp.server"], "port": smtp_values["smtp.port"]},
+        )
+    else:
+        started = time.perf_counter()
+
+        def _probe_smtp() -> None:
+            smtp: Optional[smtplib.SMTP] = None
+            try:
+                server = smtp_values["smtp.server"]
+                port = _parse_clamped_int(smtp_values["smtp.port"], default=465, min_value=1, max_value=65535)
+                username = smtp_values["smtp.username"]
+                password = smtp_values["smtp.password"]
+                if port == 465:
+                    smtp = smtplib.SMTP_SSL(server, port, timeout=10)
+                else:
+                    smtp = smtplib.SMTP(server, port, timeout=10)
+                    smtp.starttls()
+                if username and password:
+                    smtp.login(username, password)
+            finally:
+                if smtp is not None:
+                    try:
+                        smtp.quit()
+                    except Exception:
+                        pass
+
+        try:
+            await asyncio.to_thread(_probe_smtp)
+            smtp_probe_ok = True
+            smtp_latency_ms = int((time.perf_counter() - started) * 1000)
+            smtp_probe_detail = f"SMTP 连通测试成功（{smtp_latency_ms}ms）"
+            _append_item(
+                key="smtp.connectivity",
+                label="SMTP 连通性",
+                level="pass",
+                message=smtp_probe_detail,
+                details={
+                    "server": smtp_values["smtp.server"],
+                    "port": smtp_values["smtp.port"],
+                    "latency_ms": smtp_latency_ms,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            smtp_probe_detail = str(exc)
+            _append_item(
+                key="smtp.connectivity",
+                label="SMTP 连通性",
+                level="fail" if allow_registration else "warn",
+                message=f"SMTP 连通测试失败：{str(exc)[:180]}",
+                details={"server": smtp_values["smtp.server"], "port": smtp_values["smtp.port"]},
+            )
+
+    webhook_target = str(webhook_url or "").strip() or str(config_map.get("generation.alert.webhook_url") or "").strip()
+    if not webhook_target:
+        _append_item(
+            key="webhook.connectivity",
+            label="Webhook 连通性",
+            level="warn",
+            message="未配置 generation.alert.webhook_url",
+            details={},
+        )
+    elif not run_connectivity:
+        _append_item(
+            key="webhook.connectivity",
+            label="Webhook 连通性",
+            level="pass",
+            message="Webhook 地址已配置（未执行在线连通测试）",
+            details={"url": webhook_target},
+        )
+    else:
+        started = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                response = await client.post(
+                    webhook_target,
+                    json={
+                        "event": "admin.config_health.probe",
+                        "checked_at": datetime.utcnow().isoformat(),
+                    },
+                    headers={"Content-Type": "application/json"},
+                )
+                response.raise_for_status()
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            _append_item(
+                key="webhook.connectivity",
+                label="Webhook 连通性",
+                level="pass",
+                message=f"Webhook 连通测试成功（{latency_ms}ms）",
+                details={"url": webhook_target, "latency_ms": latency_ms},
+            )
+        except Exception as exc:  # noqa: BLE001
+            _append_item(
+                key="webhook.connectivity",
+                label="Webhook 连通性",
+                level="fail",
+                message=f"Webhook 连通测试失败：{str(exc)[:180]}",
+                details={"url": webhook_target},
+            )
+
+    linuxdo_enabled = _parse_bool(config_map.get("auth.linuxdo_enabled"), settings.enable_linuxdo_login)
+    if linuxdo_enabled:
+        linuxdo_required = [
+            ("linuxdo.client_id", settings.linuxdo_client_id),
+            ("linuxdo.client_secret", settings.linuxdo_client_secret),
+            ("linuxdo.redirect_uri", settings.linuxdo_redirect_uri),
+            ("linuxdo.auth_url", settings.linuxdo_auth_url),
+            ("linuxdo.token_url", settings.linuxdo_token_url),
+            ("linuxdo.user_info_url", settings.linuxdo_user_info_url),
+        ]
+        missing_linuxdo = [
+            key
+            for key, fallback in linuxdo_required
+            if not str(config_map.get(key) or fallback or "").strip()
+        ]
+    else:
+        missing_linuxdo = []
+
+    if allow_registration and not smtp_probe_ok:
+        registration_level: Literal["pass", "warn", "fail"] = "fail"
+        registration_message = "注册已开启，但邮件链路不可用"
+    elif linuxdo_enabled and missing_linuxdo:
+        registration_level = "fail"
+        registration_message = "Linux.do 登录已开启，但 OAuth 配置不完整"
+    elif allow_registration or linuxdo_enabled:
+        registration_level = "pass"
+        registration_message = "注册链路配置可用"
+    else:
+        registration_level = "warn"
+        registration_message = "注册与第三方登录均未开启"
+    _append_item(
+        key="registration.flow",
+        label="注册链路",
+        level=registration_level,
+        message=registration_message,
+        details={
+            "allow_registration": allow_registration,
+            "linuxdo_enabled": linuxdo_enabled,
+            "missing_linuxdo_keys": missing_linuxdo,
+            "smtp_probe": smtp_probe_detail,
+        },
+    )
+
+    worker_count = _parse_clamped_int(
+        config_map.get("generation.task.worker_count"),
+        default=settings.generation_task_workers,
+        min_value=1,
+        max_value=32,
+    )
+    policy_values = {
+        "max_running_per_user": _parse_clamped_int(
+            config_map.get("generation.submit.max_running_per_user"),
+            default=2,
+            min_value=0,
+            max_value=200,
+        ),
+        "max_running_per_project": _parse_clamped_int(
+            config_map.get("generation.submit.max_running_per_project"),
+            default=2,
+            min_value=0,
+            max_value=200,
+        ),
+        "max_queued_per_user": _parse_clamped_int(
+            config_map.get("generation.submit.max_queued_per_user"),
+            default=30,
+            min_value=0,
+            max_value=2000,
+        ),
+        "max_queued_per_project": _parse_clamped_int(
+            config_map.get("generation.submit.max_queued_per_project"),
+            default=20,
+            min_value=0,
+            max_value=2000,
+        ),
+        "max_running_blueprint_per_user": _parse_clamped_int(
+            config_map.get("generation.submit.max_running_blueprint_per_user"),
+            default=1,
+            min_value=0,
+            max_value=20,
+        ),
+        "max_running_chapter_per_project": _parse_clamped_int(
+            config_map.get("generation.submit.max_running_chapter_per_project"),
+            default=1,
+            min_value=0,
+            max_value=20,
+        ),
+    }
+    policy_warnings: list[str] = []
+    if worker_count < 1:
+        policy_warnings.append("generation.task.worker_count 非法")
+    if policy_values["max_running_per_user"] <= 0 and policy_values["max_queued_per_user"] <= 0:
+        policy_warnings.append("用户维度运行与排队上限均关闭，存在打满风险")
+    if policy_values["max_running_per_project"] <= 0 and policy_values["max_queued_per_project"] <= 0:
+        policy_warnings.append("项目维度运行与排队上限均关闭，存在积压风险")
+    _append_item(
+        key="generation.policy",
+        label="任务并发与限流策略",
+        level="warn" if policy_warnings else "pass",
+        message="；".join(policy_warnings) if policy_warnings else "任务并发与排队策略配置正常",
+        details={
+            "worker_count": worker_count,
+            **policy_values,
+        },
+    )
+
+    pass_count = sum(1 for item in items if item.level == "pass")
+    warn_count = sum(1 for item in items if item.level == "warn")
+    fail_count = sum(1 for item in items if item.level == "fail")
+    overall_level: Literal["pass", "warn", "fail"]
+    if fail_count > 0:
+        overall_level = "fail"
+    elif warn_count > 0:
+        overall_level = "warn"
+    else:
+        overall_level = "pass"
+
+    return ConfigHealthResponse(
+        generated_at=datetime.utcnow(),
+        overall_level=overall_level,
+        pass_count=pass_count,
+        warn_count=warn_count,
+        fail_count=fail_count,
+        items=items,
+    )
+
+
+@router.get("/writer-task-alerts", response_model=WriterTaskAlertResponse)
+async def get_writer_task_alerts(
+    window_hours: int = 24,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(get_current_admin),
+) -> WriterTaskAlertResponse:
+    if window_hours < 1 or window_hours > 24 * 7:
+        raise HTTPException(status_code=400, detail="window_hours 必须在 1~168 之间")
+
+    task_types = [TASK_TYPE_CHAPTER_GENERATION, TASK_TYPE_BLUEPRINT_GENERATION]
+    failed_statuses = {TASK_STATUS_FAILED, TASK_STATUS_CANCELED}
+    now_utc = datetime.now(timezone.utc)
+    window_since = now_utc - timedelta(hours=window_hours)
+    base_filters = [GenerationTask.task_type.in_(task_types)]
+
+    status_rows = (
+        await session.execute(
+            select(GenerationTask.status, func.count(GenerationTask.id))
+            .where(*base_filters)
+            .group_by(GenerationTask.status)
+        )
+    ).all()
+    status_counts = {str(status or "unknown"): int(count or 0) for status, count in status_rows}
+    queued_count = int(status_counts.get(TASK_STATUS_QUEUED, 0))
+    running_count = int(status_counts.get(TASK_STATUS_RUNNING, 0))
+
+    stale_timeout_raw = await session.scalar(
+        select(SystemConfig.value).where(SystemConfig.key == "generation.task.stale_timeout_seconds")
+    )
+    stale_timeout_seconds = _parse_clamped_int(
+        str(stale_timeout_raw or ""),
+        default=settings.generation_task_stale_timeout_seconds,
+        min_value=30,
+        max_value=24 * 3600,
+    )
+
+    running_rows = (
+        await session.execute(
+            select(
+                GenerationTask.heartbeat_at,
+                GenerationTask.updated_at,
+                GenerationTask.started_at,
+                GenerationTask.created_at,
+            ).where(*base_filters, GenerationTask.status == TASK_STATUS_RUNNING)
+        )
+    ).all()
+    stale_running_count = 0
+    for heartbeat_at, updated_at, started_at, created_at in running_rows:
+        heartbeat_anchor = heartbeat_at or updated_at or started_at or created_at
+        if heartbeat_anchor is None:
+            continue
+        anchor = heartbeat_anchor if getattr(heartbeat_anchor, "tzinfo", None) is not None else heartbeat_anchor.replace(tzinfo=timezone.utc)
+        age_seconds = max(0, int((now_utc - anchor).total_seconds()))
+        if age_seconds >= stale_timeout_seconds:
+            stale_running_count += 1
+
+    recent_rows = (
+        await session.execute(
+            select(
+                GenerationTask.status,
+                GenerationTask.error_message,
+                GenerationTask.status_message,
+            ).where(
+                *base_filters,
+                GenerationTask.finished_at.is_not(None),
+                GenerationTask.finished_at >= window_since,
+            )
+        )
+    ).all()
+    finished_recent_count = len(recent_rows)
+    failed_recent_count = sum(1 for status, _, _ in recent_rows if str(status or "") in failed_statuses)
+    failure_rate_percent = (
+        round((failed_recent_count * 100.0) / finished_recent_count, 2)
+        if finished_recent_count > 0
+        else 0.0
+    )
+    timeout_recent_count = 0
+    for _, error_message, status_message in recent_rows:
+        merged = f"{error_message or ''} {status_message or ''}".lower()
+        if "超时" in merged or "timeout" in merged:
+            timeout_recent_count += 1
+
+    failure_rows = (
+        await session.execute(
+            select(
+                GenerationTask.error_message,
+                GenerationTask.status_message,
+            )
+            .where(
+                *base_filters,
+                GenerationTask.status.in_(failed_statuses),
+                GenerationTask.updated_at >= window_since,
+            )
+            .order_by(GenerationTask.updated_at.desc())
+            .limit(500)
+        )
+    ).all()
+    failure_counter: dict[str, tuple[str, int]] = {}
+    for error_message, status_message in failure_rows:
+        message = str(error_message or status_message or "任务失败").strip()
+        key = message.splitlines()[0][:140] or "任务失败"
+        sample = message[:260] or key
+        previous = failure_counter.get(key)
+        if not previous:
+            failure_counter[key] = (sample, 1)
+        else:
+            failure_counter[key] = (previous[0], previous[1] + 1)
+    failure_top = sorted(failure_counter.items(), key=lambda item: item[1][1], reverse=True)[:8]
+    failure_top_items = [
+        WriterTaskFailureTopItem(error_key=key, sample_message=meta[0], count=meta[1]) for key, meta in failure_top
+    ]
+
+    alert_service = GenerationAlertService(session)
+    alert_policy = await alert_service.load_policy()
+    smtp_config = await alert_service._load_smtp_config()
+
+    channels = [
+        WriterTaskAlertChannelStatus(
+            channel="webhook",
+            enabled=bool(alert_policy.enabled and alert_policy.webhook_url.strip()),
+            configured=bool(alert_policy.webhook_url.strip()),
+            target=alert_policy.webhook_url.strip() or None,
+        ),
+        WriterTaskAlertChannelStatus(
+            channel="email",
+            enabled=bool(alert_policy.enabled and alert_policy.email_to.strip() and smtp_config),
+            configured=bool(alert_policy.email_to.strip() and smtp_config),
+            target=alert_policy.email_to.strip() or None,
+        ),
+    ]
+
+    issues: list[WriterTaskAlertIssue] = []
+    if not alert_policy.enabled:
+        issues.append(
+            WriterTaskAlertIssue(
+                key="alert_disabled",
+                label="告警开关",
+                level="warning",
+                message="任务告警已关闭（generation.alert.enabled=false）",
+                suggestion="建议在生产环境开启失败告警。",
+            )
+        )
+    if (
+        alert_policy.failure_rate_threshold_percent > 0
+        and failure_rate_percent >= alert_policy.failure_rate_threshold_percent
+    ):
+        issues.append(
+            WriterTaskAlertIssue(
+                key="failure_rate_high",
+                label="失败率过高",
+                level="critical",
+                message="最近窗口任务失败率超过阈值",
+                value=failure_rate_percent,
+                threshold=alert_policy.failure_rate_threshold_percent,
+                suggestion="检查模型可用性、提示词与外部依赖稳定性。",
+            )
+        )
+    if alert_policy.stale_running_threshold > 0 and stale_running_count >= alert_policy.stale_running_threshold:
+        issues.append(
+            WriterTaskAlertIssue(
+                key="stale_running",
+                label="卡住任务",
+                level="critical",
+                message="运行中卡住任务数量超过阈值",
+                value=float(stale_running_count),
+                threshold=float(alert_policy.stale_running_threshold),
+                suggestion="关注 worker 健康状态和上游接口超时。",
+            )
+        )
+    if alert_policy.queue_backlog_threshold > 0 and queued_count >= alert_policy.queue_backlog_threshold:
+        issues.append(
+            WriterTaskAlertIssue(
+                key="queue_backlog",
+                label="队列积压",
+                level="warning",
+                message="排队任务数量超过阈值",
+                value=float(queued_count),
+                threshold=float(alert_policy.queue_backlog_threshold),
+                suggestion="提高 worker 并发或收紧提交限流策略。",
+            )
+        )
+    if timeout_recent_count > 0:
+        issues.append(
+            WriterTaskAlertIssue(
+                key="timeout_recent",
+                label="超时任务",
+                level="warning",
+                message="最近窗口检测到任务执行超时",
+                value=float(timeout_recent_count),
+                threshold=0.0,
+                suggestion="检查超时时间配置与模型响应时延。",
+            )
+        )
+    if not issues:
+        issues.append(
+            WriterTaskAlertIssue(
+                key="healthy",
+                label="健康状态",
+                level="info",
+                message="当前未触发任务告警阈值",
+            )
+        )
+
+    return WriterTaskAlertResponse(
+        generated_at=datetime.utcnow(),
+        window_hours=window_hours,
+        enabled=alert_policy.enabled,
+        snapshot=WriterTaskAlertSnapshot(
+            queued_count=queued_count,
+            running_count=running_count,
+            stale_running_count=stale_running_count,
+            finished_recent_count=finished_recent_count,
+            failed_recent_count=failed_recent_count,
+            timeout_recent_count=timeout_recent_count,
+            failure_rate_percent=failure_rate_percent,
+        ),
+        failure_top=failure_top_items,
+        channels=channels,
+        issues=issues,
     )
 
 

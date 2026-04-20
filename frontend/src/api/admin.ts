@@ -121,6 +121,61 @@ export interface LLMBudgetAlertResponse {
   projects: LLMBudgetAlertItem[]
 }
 
+export interface ConfigHealthItem {
+  key: string
+  label: string
+  level: 'pass' | 'warn' | 'fail' | string
+  message: string
+  details: Record<string, any>
+  checked_at: string
+}
+
+export interface ConfigHealthResponse {
+  generated_at: string
+  overall_level: 'pass' | 'warn' | 'fail' | string
+  pass_count: number
+  warn_count: number
+  fail_count: number
+  items: ConfigHealthItem[]
+}
+
+export interface WriterTaskAlertIssue {
+  key: string
+  label: string
+  level: 'info' | 'warning' | 'critical' | string
+  message: string
+  value?: number | null
+  threshold?: number | null
+  suggestion?: string | null
+}
+
+export interface WriterTaskAlertChannelStatus {
+  channel: 'webhook' | 'email' | string
+  enabled: boolean
+  configured: boolean
+  target?: string | null
+}
+
+export interface WriterTaskAlertSnapshot {
+  queued_count: number
+  running_count: number
+  stale_running_count: number
+  finished_recent_count: number
+  failed_recent_count: number
+  timeout_recent_count: number
+  failure_rate_percent: number
+}
+
+export interface WriterTaskAlertResponse {
+  generated_at: string
+  window_hours: number
+  enabled: boolean
+  snapshot: WriterTaskAlertSnapshot
+  failure_top: WriterTaskFailureTopItem[]
+  channels: WriterTaskAlertChannelStatus[]
+  issues: WriterTaskAlertIssue[]
+}
+
 export interface WriterTaskQueueItem {
   task_id: string
   task_type: string
@@ -251,6 +306,15 @@ export interface WriterTaskQueueQuery {
   status_group?: 'active' | 'failed' | 'all'
   project_id?: string
   user_id?: number
+}
+
+export interface ConfigHealthQuery {
+  run_connectivity?: boolean
+  webhook_url?: string
+}
+
+export interface WriterTaskAlertQuery {
+  window_hours?: number
 }
 
 export interface AdminUser {
@@ -499,6 +563,21 @@ export class AdminAPI {
     if (query.only_alerting != null) params.set('only_alerting', String(query.only_alerting))
     const queryString = params.toString()
     return this.request(`/llm-budget-alerts${queryString ? `?${queryString}` : ''}`)
+  }
+
+  static getConfigHealth(query: ConfigHealthQuery = {}): Promise<ConfigHealthResponse> {
+    const params = new URLSearchParams()
+    if (query.run_connectivity != null) params.set('run_connectivity', String(query.run_connectivity))
+    if (query.webhook_url) params.set('webhook_url', query.webhook_url)
+    const queryString = params.toString()
+    return this.request(`/config-health${queryString ? `?${queryString}` : ''}`)
+  }
+
+  static getWriterTaskAlerts(query: WriterTaskAlertQuery = {}): Promise<WriterTaskAlertResponse> {
+    const params = new URLSearchParams()
+    if (query.window_hours != null) params.set('window_hours', String(query.window_hours))
+    const queryString = params.toString()
+    return this.request(`/writer-task-alerts${queryString ? `?${queryString}` : ''}`)
   }
 
   static getWriterTaskQueue(query: WriterTaskQueueQuery = {}): Promise<WriterTaskQueueResponse> {

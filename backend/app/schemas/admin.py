@@ -1,6 +1,6 @@
 # AIMETA P=管理员模式_管理API请求响应结构|R=用户管理_统计响应|NR=不含业务逻辑|E=AdminSchema|X=internal|A=Pydantic模式|D=pydantic|S=none|RD=./README.ai
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -123,6 +123,61 @@ class LLMBudgetAlertResponse(BaseModel):
     global_alert: Optional[LLMBudgetAlertItem] = None
     users: list[LLMBudgetAlertItem]
     projects: list[LLMBudgetAlertItem]
+
+
+class ConfigHealthItem(BaseModel):
+    key: str
+    label: str
+    level: Literal["pass", "warn", "fail"]
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    checked_at: datetime
+
+
+class ConfigHealthResponse(BaseModel):
+    generated_at: datetime
+    overall_level: Literal["pass", "warn", "fail"]
+    pass_count: int
+    warn_count: int
+    fail_count: int
+    items: list[ConfigHealthItem]
+
+
+class WriterTaskAlertIssue(BaseModel):
+    key: str
+    label: str
+    level: Literal["info", "warning", "critical"]
+    message: str
+    value: Optional[float] = None
+    threshold: Optional[float] = None
+    suggestion: Optional[str] = None
+
+
+class WriterTaskAlertChannelStatus(BaseModel):
+    channel: Literal["webhook", "email"]
+    enabled: bool
+    configured: bool
+    target: Optional[str] = None
+
+
+class WriterTaskAlertSnapshot(BaseModel):
+    queued_count: int
+    running_count: int
+    stale_running_count: int
+    finished_recent_count: int
+    failed_recent_count: int
+    timeout_recent_count: int
+    failure_rate_percent: float
+
+
+class WriterTaskAlertResponse(BaseModel):
+    generated_at: datetime
+    window_hours: int
+    enabled: bool
+    snapshot: WriterTaskAlertSnapshot
+    failure_top: list["WriterTaskFailureTopItem"]
+    channels: list[WriterTaskAlertChannelStatus]
+    issues: list[WriterTaskAlertIssue]
 
 
 class WriterTaskQueueItem(BaseModel):

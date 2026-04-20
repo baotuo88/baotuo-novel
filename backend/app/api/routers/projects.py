@@ -198,6 +198,32 @@ class ProjectBackupRestoreResponse(BaseModel):
     message: str
 
 
+class GlobalSearchAnchor(BaseModel):
+    section: str
+    chapter_number: Optional[int] = None
+    timeline_event_id: Optional[int] = None
+    foreshadowing_id: Optional[int] = None
+    material_id: Optional[str] = None
+    term: Optional[str] = None
+
+
+class GlobalSearchItem(BaseModel):
+    id: str
+    scope: str
+    title: str
+    snippet: str
+    score: float
+    chapter_number: Optional[int] = None
+    anchor: GlobalSearchAnchor
+
+
+class GlobalSearchResponse(BaseModel):
+    project_id: str
+    query: str
+    total: int
+    items: List[GlobalSearchItem]
+
+
 def _model_to_dict(instance: Any) -> Optional[Dict[str, Any]]:
     if instance is None:
         return None
@@ -274,6 +300,60 @@ def _normalize_terminology_entries(items: List[Any]) -> List[Dict[str, Any]]:
         seen_terms.add(term_key)
     normalized.sort(key=lambda item: item["term"].lower())
     return normalized
+
+
+def _normalize_search_text(value: Any) -> str:
+    return " ".join(str(value or "").replace("\n", " ").split()).lower()
+
+
+def _tokenize_search_query(query: str) -> List[str]:
+    normalized = _normalize_search_text(query)
+    if not normalized:
+        return []
+    tokens: List[str] = []
+    seen: set[str] = set()
+    for token in normalized.split(" "):
+        token_value = token.strip()
+        if not token_value or token_value in seen:
+            continue
+        tokens.append(token_value)
+        seen.add(token_value)
+    has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in normalized)
+    if has_cjk and normalized not in seen:
+        tokens.append(normalized)
+    return tokens
+
+
+def _count_search_hits(text: str, tokens: List[str]) -> int:
+    if not text or not tokens:
+        return 0
+    count = 0
+    for token in tokens:
+        if not token:
+            continue
+        count += min(8, text.count(token))
+    return count
+
+
+def _build_search_snippet(raw_text: Any, tokens: List[str], max_length: int = 140) -> str:
+    text = " ".join(str(raw_text or "").split())
+    if not text:
+        return ""
+    lowered = text.lower()
+    first_index = -1
+    for token in tokens:
+        idx = lowered.find(token)
+        if idx < 0:
+            continue
+        if first_index < 0 or idx < first_index:
+            first_index = idx
+    if first_index < 0:
+        first_index = 0
+    start = max(0, first_index - max_length // 3)
+    snippet = text[start:start + max_length]
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if (start + max_length) < len(text) else ""
+    return f"{prefix}{snippet}{suffix}"
 
 
 def _short_text(value: Any, max_length: int = 72) -> str:
@@ -940,6 +1020,338 @@ async def delete_project_material(
     memory.extra = {**extra, "material_library": filtered}
     await session.commit()
     return {"project_id": project_id, "deleted": True, "material_id": target_id}
+
+
+@router.get("/{project_id}/global-search", response_model=GlobalSearchResponse)
+async def search_project_global(
+    project_id: str,
+    q: str = Query(..., min_length=1, max_length=120),
+    limit: int = Query(default=60, ge=1, le=200),
+    scopes: Optional[str] = Query(default=None, description="逗号分隔：blueprint,chapter_outline,chapters,materials,timeline,foreshadowing,terminology"),
+    session: AsyncSession = Depends(get_session),
+    current_user: UserInDB = Depends(get_current_user),
+) -> GlobalSearchResponse:
+    novel_service = NovelService(session)
+    await novel_service.ensure_project_owner(project_id, current_user.id)
+
+    query_text = str(q or "").strip()
+    if not query_text:
+        raise HTTPException(status_code=400, detail="搜索关键词不能为空")
+    tokens = _tokenize_search_query(query_text)
+    if not tokens:
+        raise HTTPException(status_code=400, detail="搜索关键词不能为空")
+
+    valid_scopes = {
+        "blueprint",
+        "chapter_outline",
+        "chapters",
+        "materials",
+        "timeline",
+        "foreshadowing",
+        "terminology",
+    }
+    requested_scopes = {
+        item.strip().lower()
+        for item in str(scopes or "").split(",")
+        if item.strip()
+    }
+    scope_set = requested_scopes & valid_scopes if requested_scopes else valid_scopes
+    if not scope_set:
+        raise HTTPException(status_code=400, detail="scopes 参数无效")
+
+    results: List[Dict[str, Any]] = []
+    seen_keys: set[str] = set()
+
+    def push_item(
+        *,
+        item_id: str,
+        scope: str,
+        title: str,
+        snippet_source: Any,
+        score: float,
+        anchor: Dict[str, Any],
+        chapter_number: Optional[int] = None,
+    ) -> None:
+        if score <= 0:
+            return
+        unique_key = f"{scope}:{item_id}"
+        if unique_key in seen_keys:
+            return
+        seen_keys.add(unique_key)
+        snippet = _build_search_snippet(snippet_source, tokens)
+        results.append(
+            {
+                "id": item_id,
+                "scope": scope,
+                "title": title,
+                "snippet": snippet,
+                "score": round(float(score), 3),
+                "chapter_number": chapter_number,
+                "anchor": anchor,
+            }
+        )
+
+    project_schema = await novel_service.get_project_schema(project_id, current_user.id)
+    blueprint = project_schema.blueprint.model_dump() if project_schema.blueprint else {}
+
+    if "blueprint" in scope_set and blueprint:
+        overview_blob = " ".join(
+            [
+                str(blueprint.get("title") or ""),
+                str(blueprint.get("target_audience") or ""),
+                str(blueprint.get("genre") or ""),
+                str(blueprint.get("style") or ""),
+                str(blueprint.get("tone") or ""),
+                str(blueprint.get("one_sentence_summary") or ""),
+                str(blueprint.get("full_synopsis") or ""),
+            ]
+        )
+        overview_hits = _count_search_hits(_normalize_search_text(overview_blob), tokens)
+        push_item(
+            item_id="blueprint:overview",
+            scope="blueprint",
+            title="蓝图概览",
+            snippet_source=overview_blob,
+            score=overview_hits * 8,
+            anchor={"section": "overview"},
+        )
+
+        world_setting_blob = json.dumps(blueprint.get("world_setting") or {}, ensure_ascii=False)
+        world_setting_hits = _count_search_hits(_normalize_search_text(world_setting_blob), tokens)
+        push_item(
+            item_id="blueprint:world_setting",
+            scope="blueprint",
+            title="世界设定",
+            snippet_source=world_setting_blob,
+            score=world_setting_hits * 7,
+            anchor={"section": "world_setting"},
+        )
+
+        characters = blueprint.get("characters") or []
+        if isinstance(characters, list):
+            for index, character in enumerate(characters, start=1):
+                if not isinstance(character, dict):
+                    continue
+                name = str(character.get("name") or f"角色 {index}").strip() or f"角色 {index}"
+                blob = json.dumps(character, ensure_ascii=False)
+                hits = _count_search_hits(_normalize_search_text(blob), tokens)
+                push_item(
+                    item_id=f"character:{index}",
+                    scope="blueprint",
+                    title=f"角色 · {name}",
+                    snippet_source=blob,
+                    score=hits * 6,
+                    anchor={"section": "characters"},
+                )
+
+        relationships = blueprint.get("relationships") or []
+        if isinstance(relationships, list):
+            for index, relation in enumerate(relationships, start=1):
+                if not isinstance(relation, dict):
+                    continue
+                from_name = str(relation.get("character_from") or relation.get("from") or "").strip()
+                to_name = str(relation.get("character_to") or relation.get("to") or "").strip()
+                relation_title = " - ".join(item for item in [from_name, to_name] if item) or f"关系 {index}"
+                blob = json.dumps(relation, ensure_ascii=False)
+                hits = _count_search_hits(_normalize_search_text(blob), tokens)
+                push_item(
+                    item_id=f"relationship:{index}",
+                    scope="blueprint",
+                    title=f"关系 · {relation_title}",
+                    snippet_source=blob,
+                    score=hits * 5,
+                    anchor={"section": "relationships"},
+                )
+
+    if "chapter_outline" in scope_set and blueprint:
+        outlines = blueprint.get("chapter_outline") or []
+        if isinstance(outlines, list):
+            for item in outlines:
+                if not isinstance(item, dict):
+                    continue
+                chapter_number = int(item.get("chapter_number") or 0)
+                title = str(item.get("title") or f"第{chapter_number}章").strip() or f"第{chapter_number}章"
+                summary = str(item.get("summary") or "").strip()
+                blob = f"{title}\n{summary}"
+                hits = _count_search_hits(_normalize_search_text(blob), tokens)
+                push_item(
+                    item_id=f"outline:{chapter_number}",
+                    scope="chapter_outline",
+                    title=f"大纲 · 第{chapter_number}章 {title}",
+                    snippet_source=blob,
+                    score=hits * 7,
+                    chapter_number=chapter_number if chapter_number > 0 else None,
+                    anchor={
+                        "section": "chapter_outline",
+                        "chapter_number": chapter_number if chapter_number > 0 else None,
+                    },
+                )
+
+    memory = (
+        await session.execute(
+            select(ProjectMemory).where(ProjectMemory.project_id == project_id)
+        )
+    ).scalars().first()
+    memory_extra = memory.extra if (memory and isinstance(memory.extra, dict)) else {}
+
+    if "materials" in scope_set:
+        material_library = _extract_material_library(memory)
+        for item in material_library:
+            item_id = str(item.get("id") or "").strip()
+            title = str(item.get("title") or "未命名素材").strip() or "未命名素材"
+            content = str(item.get("content") or "")
+            tags = item.get("tags") if isinstance(item.get("tags"), list) else []
+            blob = "\n".join([title, content, " ".join(str(tag) for tag in tags)])
+            hits = _count_search_hits(_normalize_search_text(blob), tokens)
+            push_item(
+                item_id=f"material:{item_id or title}",
+                scope="materials",
+                title=f"素材 · {title}",
+                snippet_source=blob,
+                score=hits * 5,
+                anchor={"section": "material_library", "material_id": item_id or None},
+            )
+
+    if "terminology" in scope_set:
+        terminology_raw = memory_extra.get("terminology_dictionary")
+        terminology_items = _normalize_terminology_entries(terminology_raw if isinstance(terminology_raw, list) else [])
+        for entry in terminology_items:
+            term = str(entry.get("term") or "").strip()
+            canonical = str(entry.get("canonical") or "").strip()
+            aliases = entry.get("aliases") if isinstance(entry.get("aliases"), list) else []
+            note = str(entry.get("note") or "")
+            category = str(entry.get("category") or "")
+            blob = "\n".join([term, canonical, note, category, " ".join(str(item) for item in aliases)])
+            hits = _count_search_hits(_normalize_search_text(blob), tokens)
+            push_item(
+                item_id=f"term:{term or canonical}",
+                scope="terminology",
+                title=f"术语 · {term or canonical}",
+                snippet_source=blob,
+                score=hits * 6,
+                anchor={"section": "terminology", "term": term or canonical},
+            )
+
+    if "timeline" in scope_set:
+        timeline_rows = (
+            await session.execute(
+                select(TimelineEvent)
+                .where(TimelineEvent.project_id == project_id)
+                .order_by(TimelineEvent.chapter_number.asc(), TimelineEvent.id.asc())
+                .limit(1600)
+            )
+        ).scalars().all()
+        for event in timeline_rows:
+            involved = event.involved_characters if isinstance(event.involved_characters, list) else []
+            blob = "\n".join(
+                [
+                    str(event.event_title or ""),
+                    str(event.event_description or ""),
+                    str(event.location or ""),
+                    " ".join(str(name) for name in involved),
+                ]
+            )
+            hits = _count_search_hits(_normalize_search_text(blob), tokens)
+            chapter_number = int(event.chapter_number or 0)
+            title = str(event.event_title or "").strip() or f"时间线事件 {event.id}"
+            push_item(
+                item_id=f"timeline:{event.id}",
+                scope="timeline",
+                title=f"时间线 · 第{chapter_number}章 {title}",
+                snippet_source=blob,
+                score=hits * 5,
+                chapter_number=chapter_number if chapter_number > 0 else None,
+                anchor={
+                    "section": "timeline",
+                    "chapter_number": chapter_number if chapter_number > 0 else None,
+                    "timeline_event_id": int(event.id),
+                },
+            )
+
+    if "foreshadowing" in scope_set:
+        foreshadowing_rows = (
+            await session.execute(
+                select(Foreshadowing)
+                .where(Foreshadowing.project_id == project_id)
+                .order_by(Foreshadowing.chapter_number.asc(), Foreshadowing.id.asc())
+                .limit(1600)
+            )
+        ).scalars().all()
+        for item in foreshadowing_rows:
+            keywords = item.keywords if isinstance(item.keywords, list) else []
+            related_characters = item.related_characters if isinstance(item.related_characters, list) else []
+            blob = "\n".join(
+                [
+                    str(item.content or ""),
+                    str(item.type or ""),
+                    str(item.author_note or ""),
+                    " ".join(str(key) for key in keywords),
+                    " ".join(str(name) for name in related_characters),
+                ]
+            )
+            hits = _count_search_hits(_normalize_search_text(blob), tokens)
+            chapter_number = int(item.chapter_number or 0)
+            status = str(item.status or "open")
+            push_item(
+                item_id=f"foreshadowing:{item.id}",
+                scope="foreshadowing",
+                title=f"伏笔 · 第{chapter_number}章 · {status}",
+                snippet_source=blob,
+                score=hits * 5,
+                chapter_number=chapter_number if chapter_number > 0 else None,
+                anchor={
+                    "section": "foreshadowing",
+                    "chapter_number": chapter_number if chapter_number > 0 else None,
+                    "foreshadowing_id": int(item.id),
+                },
+            )
+
+    if "chapters" in scope_set:
+        chapter_rows = (
+            await session.execute(
+                select(Chapter)
+                .options(selectinload(Chapter.selected_version))
+                .where(Chapter.project_id == project_id)
+                .order_by(Chapter.chapter_number.asc())
+                .limit(2400)
+            )
+        ).scalars().all()
+        for chapter in chapter_rows:
+            chapter_number = int(chapter.chapter_number or 0)
+            content = ""
+            if chapter.selected_version and chapter.selected_version.content:
+                content = str(chapter.selected_version.content)
+            summary = str(chapter.real_summary or "")
+            blob = "\n".join([summary, content])
+            hits = _count_search_hits(_normalize_search_text(blob), tokens)
+            push_item(
+                item_id=f"chapter:{chapter_number}",
+                scope="chapters",
+                title=f"章节 · 第{chapter_number}章",
+                snippet_source=blob,
+                score=hits * 4,
+                chapter_number=chapter_number if chapter_number > 0 else None,
+                anchor={
+                    "section": "chapters",
+                    "chapter_number": chapter_number if chapter_number > 0 else None,
+                },
+            )
+
+    results.sort(
+        key=lambda item: (
+            float(item.get("score") or 0),
+            int(item.get("chapter_number") or 0),
+            str(item.get("id") or ""),
+        ),
+        reverse=True,
+    )
+    sliced = results[:limit]
+    return GlobalSearchResponse(
+        project_id=project_id,
+        query=query_text,
+        total=len(results),
+        items=[GlobalSearchItem(**item) for item in sliced],
+    )
 
 
 @router.get("/{project_id}/factions")

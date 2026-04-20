@@ -392,6 +392,7 @@ export type AnalysisSectionType =
   | 'publish_center'
   | 'material_library'
   | 'project_backup'
+  | 'global_search'
 
 // 所有Section的联合类型
 export type AllSectionType = NovelSectionType | AnalysisSectionType
@@ -500,6 +501,32 @@ export interface ProjectBackupRestoreResponse {
   project_id: string
   stats: Record<string, number>
   message: string
+}
+
+export interface GlobalSearchAnchor {
+  section: AllSectionType | string
+  chapter_number?: number | null
+  timeline_event_id?: number | null
+  foreshadowing_id?: number | null
+  material_id?: string | null
+  term?: string | null
+}
+
+export interface GlobalSearchItem {
+  id: string
+  scope: string
+  title: string
+  snippet: string
+  score: number
+  chapter_number?: number | null
+  anchor: GlobalSearchAnchor
+}
+
+export interface GlobalSearchResponse {
+  project_id: string
+  query: string
+  total: number
+  items: GlobalSearchItem[]
 }
 
 export interface WritingPresetItem {
@@ -944,6 +971,19 @@ export class NovelAPI {
     return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/materials/${encodeURIComponent(materialId)}`, {
       method: 'DELETE'
     })
+  }
+
+  static async searchProjectGlobal(
+    projectId: string,
+    query: { q: string; limit?: number; scopes?: string[] }
+  ): Promise<GlobalSearchResponse> {
+    const params = new URLSearchParams()
+    params.set('q', query.q)
+    if (query.limit != null) params.set('limit', String(query.limit))
+    if (query.scopes && query.scopes.length > 0) {
+      params.set('scopes', query.scopes.join(','))
+    }
+    return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/global-search?${params.toString()}`)
   }
 
   static async downloadProjectBackup(projectId: string): Promise<void> {

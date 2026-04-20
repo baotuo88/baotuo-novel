@@ -258,6 +258,7 @@ import QualityDashboardSection from '@/components/novel-detail/QualityDashboardS
 import PublishCenterSection from '@/components/novel-detail/PublishCenterSection.vue'
 import MaterialLibrarySection from '@/components/novel-detail/MaterialLibrarySection.vue'
 import ProjectBackupSection from '@/components/novel-detail/ProjectBackupSection.vue'
+import GlobalSearchSection from '@/components/novel-detail/GlobalSearchSection.vue'
 
 interface Props {
   isAdmin?: boolean
@@ -287,6 +288,7 @@ const sections: Array<{ key: SectionKey; label: string; description: string }> =
         { key: 'quality_dashboard' as SectionKey, label: '质量看板', description: '一致性与闭环质量' },
         { key: 'publish_center' as SectionKey, label: '发布中心', description: '多格式导出与发布' },
         { key: 'material_library' as SectionKey, label: '素材库', description: '灵感与资料统一管理' },
+        { key: 'global_search' as SectionKey, label: '全局搜索', description: '跨模块统一检索入口' },
         { key: 'project_backup' as SectionKey, label: '备份恢复', description: '项目导入导出与恢复' },
       ]
     : []),
@@ -307,6 +309,7 @@ const sectionComponents: Record<SectionKey, any> = {
   quality_dashboard: QualityDashboardSection,
   publish_center: PublishCenterSection,
   material_library: MaterialLibrarySection,
+  global_search: GlobalSearchSection,
   project_backup: ProjectBackupSection,
   timeline: TimelineSection,
   terminology: TerminologySection,
@@ -358,6 +361,10 @@ const getSectionIcon = (key: SectionKey) => {
       h('path', { d: 'M4 5h16v14H4z' }),
       h('path', { d: 'M8 9h8M8 13h8M8 17h4' })
     ]),
+    global_search: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
+      h('circle', { cx: 11, cy: 11, r: 7 }),
+      h('path', { d: 'M21 21l-4.35-4.35' }),
+    ]),
     project_backup: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
       h('path', { d: 'M12 3v12' }),
       h('path', { d: 'M8 7l4-4 4 4' }),
@@ -405,6 +412,7 @@ const sectionLoading = reactive<Record<SectionKey, boolean>>({
   quality_dashboard: false,
   publish_center: false,
   material_library: false,
+  global_search: false,
   project_backup: false,
   timeline: false,
   terminology: false,
@@ -422,6 +430,7 @@ const sectionError = reactive<Record<SectionKey, string | null>>({
   quality_dashboard: null,
   publish_center: null,
   material_library: null,
+  global_search: null,
   project_backup: null,
   timeline: null,
   terminology: null,
@@ -576,7 +585,7 @@ const loadSection = async (section: SectionKey, force = false) => {
   }
   
   // 分析型Section使用独立的API，不需要在这里加载
-  const analysisSections: SectionKey[] = ['emotion_curve', 'foreshadowing', 'timeline', 'terminology', 'publish_center', 'material_library', 'project_backup']
+  const analysisSections: SectionKey[] = ['emotion_curve', 'foreshadowing', 'timeline', 'terminology', 'publish_center', 'material_library', 'global_search', 'project_backup']
   if (analysisSections.includes(section)) {
     return
   }
@@ -662,6 +671,10 @@ const componentProps = computed(() => {
       return {
         projectId,
         editable
+      }
+    case 'global_search':
+      return {
+        projectId
       }
     case 'project_backup':
       return {
@@ -755,12 +768,15 @@ const handleWorldGraphRefresh = async () => {
 }
 
 const handleGraphNavigate = async (payload: {
-  section: 'timeline' | 'foreshadowing'
+  section: string
   chapterNumber?: number
   eventId?: number
   foreshadowingId?: number
+  materialId?: string
+  term?: string
+  query?: string
 }) => {
-  const targetSection: SectionKey = payload.section
+  const targetSection: SectionKey = isSectionKey(payload.section) ? payload.section : 'overview'
   activeSection.value = targetSection
   await loadSection(targetSection, true)
   await router.replace({
@@ -770,6 +786,9 @@ const handleGraphNavigate = async (payload: {
       chapter: payload.chapterNumber ? String(payload.chapterNumber) : undefined,
       timeline_event_id: payload.eventId ? String(payload.eventId) : undefined,
       foreshadowing_id: payload.foreshadowingId ? String(payload.foreshadowingId) : undefined,
+      material_id: payload.materialId || undefined,
+      term: payload.term || undefined,
+      search_q: payload.query || undefined,
     }
   })
 }
