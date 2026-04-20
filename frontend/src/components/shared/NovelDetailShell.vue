@@ -449,6 +449,9 @@ const activeSection = ref<SectionKey>('overview')
 const focusChapterNumber = ref<number | null>(null)
 const focusTimelineEventId = ref<number | null>(null)
 const focusForeshadowingId = ref<number | null>(null)
+const focusMaterialId = ref<string | null>(null)
+const focusTerm = ref<string | null>(null)
+const focusSearchQuery = ref<string | null>(null)
 
 const isSectionKey = (value: string): value is SectionKey => (
   sections.some((section) => section.key === value)
@@ -482,6 +485,27 @@ const parseForeshadowingIdFromQuery = (): number | null => {
   const value = Number(raw)
   if (!Number.isInteger(value) || value < 1) return null
   return value
+}
+
+const parseMaterialIdFromQuery = (): string | null => {
+  const raw = route.query.material_id
+  if (typeof raw !== 'string') return null
+  const value = raw.trim()
+  return value || null
+}
+
+const parseTermFromQuery = (): string | null => {
+  const raw = route.query.term
+  if (typeof raw !== 'string') return null
+  const value = raw.trim()
+  return value || null
+}
+
+const parseSearchQueryFromQuery = (): string | null => {
+  const raw = route.query.search_q
+  if (typeof raw !== 'string') return null
+  const value = raw.trim()
+  return value || null
 }
 
 // Modal state (user mode only)
@@ -670,11 +694,14 @@ const componentProps = computed(() => {
     case 'material_library':
       return {
         projectId,
-        editable
+        editable,
+        focusMaterialId: activeSection.value === 'material_library' ? focusMaterialId.value : null,
+        focusQuery: activeSection.value === 'material_library' ? focusSearchQuery.value : null
       }
     case 'global_search':
       return {
-        projectId
+        projectId,
+        initialQuery: activeSection.value === 'global_search' ? focusSearchQuery.value : null
       }
     case 'project_backup':
       return {
@@ -690,7 +717,9 @@ const componentProps = computed(() => {
     case 'terminology':
       return {
         editable,
-        projectId
+        projectId,
+        focusTerm: activeSection.value === 'terminology' ? focusTerm.value : null,
+        focusQuery: activeSection.value === 'terminology' ? focusSearchQuery.value : null
       }
     case 'foreshadowing':
       return {
@@ -851,6 +880,9 @@ onMounted(async () => {
   focusChapterNumber.value = parseChapterFromQuery()
   focusTimelineEventId.value = parseTimelineEventIdFromQuery()
   focusForeshadowingId.value = parseForeshadowingIdFromQuery()
+  focusMaterialId.value = parseMaterialIdFromQuery()
+  focusTerm.value = parseTermFromQuery()
+  focusSearchQuery.value = parseSearchQueryFromQuery()
 
   // 只加载必要的 section 数据，不预加载完整项目
   await loadSection('overview', true)
@@ -871,7 +903,15 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () => [route.query.section, route.query.chapter, route.query.timeline_event_id, route.query.foreshadowing_id],
+  () => [
+    route.query.section,
+    route.query.chapter,
+    route.query.timeline_event_id,
+    route.query.foreshadowing_id,
+    route.query.material_id,
+    route.query.term,
+    route.query.search_q
+  ],
   () => {
     const targetSection = parseSectionFromQuery()
     if (targetSection && targetSection !== activeSection.value) {
@@ -881,6 +921,9 @@ watch(
     focusChapterNumber.value = parseChapterFromQuery()
     focusTimelineEventId.value = parseTimelineEventIdFromQuery()
     focusForeshadowingId.value = parseForeshadowingIdFromQuery()
+    focusMaterialId.value = parseMaterialIdFromQuery()
+    focusTerm.value = parseTermFromQuery()
+    focusSearchQuery.value = parseSearchQueryFromQuery()
   }
 )
 </script>

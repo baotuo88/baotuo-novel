@@ -3,22 +3,35 @@
 第四阶段集成测试
 测试所有优化模块的功能
 """
-import sys
-sys.path.insert(0, '/root/AI-novel/backend/app/services')
 
-from prompt_templates_optimized import (
-    SYSTEM_MESSAGE_NOVELIST,
-    generate_chapter_prompt,
-    generate_outline_prompt,
-    PROMPT_TEMPLATES,
-)
-from pacing_controller import PacingController
-from character_knowledge_manager import (
-    CharacterKnowledgeManager,
-    KnowledgeType,
-    AcquisitionMethod,
-)
-from outline_rewriter import OutlineRewriter, PostProcessor
+try:
+    from .prompt_templates_optimized import (
+        SYSTEM_MESSAGE_NOVELIST,
+        generate_chapter_prompt,
+        generate_outline_prompt,
+        PROMPT_TEMPLATES,
+    )
+    from .pacing_controller import PacingController
+    from .character_knowledge_manager import (
+        CharacterKnowledgeManager,
+        KnowledgeType,
+        AcquisitionMethod,
+    )
+    from .outline_rewriter import OutlineRewriter, PostProcessor
+except ImportError:  # pragma: no cover - 兼容直接 python 执行
+    from prompt_templates_optimized import (
+        SYSTEM_MESSAGE_NOVELIST,
+        generate_chapter_prompt,
+        generate_outline_prompt,
+        PROMPT_TEMPLATES,
+    )
+    from pacing_controller import PacingController
+    from character_knowledge_manager import (
+        CharacterKnowledgeManager,
+        KnowledgeType,
+        AcquisitionMethod,
+    )
+    from outline_rewriter import OutlineRewriter, PostProcessor
 
 
 def test_prompt_templates():

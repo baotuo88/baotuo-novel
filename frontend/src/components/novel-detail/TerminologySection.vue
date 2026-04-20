@@ -54,8 +54,12 @@
         <div
           v-for="(item, index) in entryDrafts"
           :key="item.local_id"
-          class="md-card md-card-outlined p-4"
+          :class="[
+            'md-card md-card-outlined p-4',
+            item.local_id === focusedLocalId ? 'term-item-focused' : ''
+          ]"
           style="border-radius: var(--md-radius-md);"
+          :data-term-local-id="item.local_id"
         >
           <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
             <div class="flex min-w-0 items-center gap-2">
@@ -125,7 +129,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { NovelAPI, type TerminologyEntryItem } from '@/api/novel'
 
@@ -143,6 +147,8 @@ const props = withDefaults(
   defineProps<{
     projectId?: string
     editable?: boolean
+    focusTerm?: string | null
+    focusQuery?: string | null
   }>(),
   {
     editable: true
@@ -157,6 +163,7 @@ const isSaving = ref(false)
 const error = ref<string | null>(null)
 const saveHint = ref('')
 const entryDrafts = ref<TerminologyDraft[]>([])
+const focusedLocalId = ref('')
 
 const toDraft = (item: TerminologyEntryItem, index: number): TerminologyDraft => ({
   local_id: `term-${index}-${item.term || 'new'}`,
@@ -241,6 +248,47 @@ const removeEntry = (index: number) => {
   entryDrafts.value = next
 }
 
+const applyFocus = async () => {
+  const focusTerm = String(props.focusTerm || '').trim().toLowerCase()
+  const focusQuery = String(props.focusQuery || '').trim().toLowerCase()
+
+  if (!entryDrafts.value.length) {
+    focusedLocalId.value = ''
+    return
+  }
+
+  let target: TerminologyDraft | undefined
+  if (focusTerm) {
+    target = entryDrafts.value.find((item) => (
+      item.term.toLowerCase() === focusTerm
+      || item.canonical.toLowerCase() === focusTerm
+      || item.term.toLowerCase().includes(focusTerm)
+      || item.canonical.toLowerCase().includes(focusTerm)
+    ))
+  }
+
+  if (!target && focusQuery) {
+    target = entryDrafts.value.find((item) => (
+      item.term.toLowerCase().includes(focusQuery)
+      || item.canonical.toLowerCase().includes(focusQuery)
+      || item.aliases_text.toLowerCase().includes(focusQuery)
+      || item.note.toLowerCase().includes(focusQuery)
+    ))
+  }
+
+  if (!target) {
+    focusedLocalId.value = ''
+    return
+  }
+
+  focusedLocalId.value = target.local_id
+  await nextTick()
+  const node = document.querySelector(`[data-term-local-id="${target.local_id}"]`)
+  if (node instanceof HTMLElement) {
+    node.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
 watch(
   () => resolvedProjectId.value,
   () => {
@@ -248,4 +296,19 @@ watch(
   },
   { immediate: true }
 )
+
+watch(
+  () => [props.focusTerm, props.focusQuery, entryDrafts.value.length],
+  () => {
+    void applyFocus()
+  },
+  { immediate: true }
+)
 </script>
+
+<style scoped>
+.term-item-focused {
+  border-color: rgba(37, 99, 235, 0.72);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.26);
+}
+</style>

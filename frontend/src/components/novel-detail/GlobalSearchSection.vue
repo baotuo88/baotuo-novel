@@ -29,7 +29,7 @@
     <div v-if="error" class="search-error">{{ error }}</div>
 
     <div class="search-meta">
-      <span v-if="!loading">结果：{{ results.length }} 条</span>
+      <span v-if="!loading">结果：{{ resultTotal }} 条（展示 {{ results.length }} 条）</span>
       <span v-else>正在检索，请稍候...</span>
     </div>
 
@@ -53,12 +53,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 
 import { NovelAPI, type GlobalSearchItem } from '@/api/novel'
 
 interface Props {
   projectId: string
+  initialQuery?: string | null
 }
 
 const props = defineProps<Props>()
@@ -78,6 +79,7 @@ const query = ref('')
 const loading = ref(false)
 const error = ref('')
 const results = ref<GlobalSearchItem[]>([])
+const resultTotal = ref(0)
 
 const scopeOptions = [
   { key: 'blueprint', label: '蓝图' },
@@ -120,6 +122,7 @@ const runSearch = async () => {
   error.value = ''
   if (!keyword) {
     results.value = []
+    resultTotal.value = 0
     return
   }
   loading.value = true
@@ -130,6 +133,7 @@ const runSearch = async () => {
       scopes: selectedScopes.value
     })
     results.value = response.items || []
+    resultTotal.value = Number(response.total || 0)
   } catch (err) {
     error.value = err instanceof Error ? err.message : '搜索失败'
   } finally {
@@ -149,6 +153,18 @@ const locateResult = (item: GlobalSearchItem) => {
     query: query.value.trim() || undefined
   })
 }
+
+watch(
+  () => props.initialQuery,
+  (value) => {
+    const normalized = String(value || '').trim()
+    if (!normalized) return
+    if (!query.value.trim()) {
+      query.value = normalized
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>

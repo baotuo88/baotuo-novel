@@ -39,8 +39,12 @@
       <article
         v-for="item in items"
         :key="item.id"
-        class="md-card md-card-outlined p-4 material-card"
+        :class="[
+          'md-card md-card-outlined p-4 material-card',
+          item.id === focusedMaterialId ? 'material-card-focused' : ''
+        ]"
         style="border-radius: var(--md-radius-md);"
+        :data-material-id="item.id"
       >
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
@@ -119,12 +123,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { NovelAPI, type ProjectMaterialItem } from '@/api/novel'
 
 const props = defineProps<{
   projectId: string
   editable?: boolean
+  focusMaterialId?: string | null
+  focusQuery?: string | null
 }>()
 
 const loading = ref(false)
@@ -136,6 +142,7 @@ const page = ref(1)
 const pageSize = ref(8)
 const total = ref(0)
 const items = ref<ProjectMaterialItem[]>([])
+const focusedMaterialId = ref('')
 
 const formVisible = ref(false)
 const editingId = ref<string | null>(null)
@@ -173,6 +180,82 @@ const reload = async () => {
     errorMessage.value = error instanceof Error ? error.message : '素材加载失败'
   } finally {
     loading.value = false
+  }
+}
+
+const findMaterialPage = async (
+  materialId: string,
+  filters?: { keyword?: string; material_type?: string }
+): Promise<number | null> => {
+  const scanPageSize = 100
+  let scanPage = 1
+  let totalCount = 0
+
+  do {
+    const response = await NovelAPI.listProjectMaterials(props.projectId, {
+      page: scanPage,
+      page_size: scanPageSize,
+      keyword: filters?.keyword,
+      material_type: filters?.material_type
+    })
+    const list = response.items || []
+    const index = list.findIndex((item) => item.id === materialId)
+    if (index >= 0) {
+      const globalIndex = (scanPage - 1) * scanPageSize + index
+      return Math.floor(globalIndex / pageSize.value) + 1
+    }
+    totalCount = Number(response.total || 0)
+    scanPage += 1
+  } while ((scanPage - 1) * scanPageSize < totalCount)
+
+  return null
+}
+
+const scrollToMaterial = async (materialId: string) => {
+  await nextTick()
+  const node = document.querySelector(`[data-material-id="${materialId}"]`)
+  if (node instanceof HTMLElement) {
+    node.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
+const applyFocus = async () => {
+  const targetId = String(props.focusMaterialId || '').trim()
+  const queryText = String(props.focusQuery || '').trim()
+  focusedMaterialId.value = targetId
+
+  if (queryText && keyword.value !== queryText) {
+    keyword.value = queryText
+    page.value = 1
+    await reload()
+  } else if (!items.value.length && !loading.value) {
+    await reload()
+  }
+
+  if (!targetId) return
+  if (items.value.some((item) => item.id === targetId)) {
+    await scrollToMaterial(targetId)
+    return
+  }
+
+  const filteredPage = await findMaterialPage(targetId, {
+    keyword: keyword.value || undefined,
+    material_type: materialType.value || undefined
+  })
+  if (filteredPage !== null) {
+    page.value = filteredPage
+    await reload()
+    await scrollToMaterial(targetId)
+    return
+  }
+
+  keyword.value = ''
+  materialType.value = ''
+  const fallbackPage = await findMaterialPage(targetId)
+  if (fallbackPage !== null) {
+    page.value = fallbackPage
+    await reload()
+    await scrollToMaterial(targetId)
   }
 }
 
@@ -257,9 +340,25 @@ const removeItem = async (item: ProjectMaterialItem) => {
   }
 }
 
-onMounted(() => {
-  void reload()
-})
+watch(
+  () => props.projectId,
+  () => {
+    page.value = 1
+    keyword.value = ''
+    materialType.value = ''
+    focusedMaterialId.value = ''
+    void reload()
+  },
+  { immediate: true }
+)
+
+watch(
+  () => [props.focusMaterialId, props.focusQuery],
+  () => {
+    void applyFocus()
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>
@@ -271,6 +370,11 @@ onMounted(() => {
 
 .material-card {
   min-height: 220px;
+}
+
+.material-card-focused {
+  border-color: rgba(37, 99, 235, 0.72);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.26);
 }
 
 .material-content {
