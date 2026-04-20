@@ -7,39 +7,42 @@ import vueJsx from '@vitejs/plugin-vue-jsx'
 import vueDevTools from 'vite-plugin-vue-devtools'
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [
     vue(),
     vueJsx(),
-    vueDevTools(),
-  ],
+    command === 'serve' ? vueDevTools() : null,
+  ].filter(Boolean),
   build: {
     rollupOptions: {
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return
+
+          const normalizedId = id.replace(/\\/g, '/')
           if (
-            id.includes('/vue/') ||
-            id.includes('/pinia/') ||
-            id.includes('/vue-router/')
-          ) {
-            return 'framework'
-          }
-          if (
-            id.includes('/naive-ui/') ||
-            id.includes('/vueuc/') ||
-            id.includes('/vooks/') ||
-            id.includes('/@css-render/')
+            normalizedId.includes('/node_modules/naive-ui/') ||
+            normalizedId.includes('/node_modules/vueuc/') ||
+            normalizedId.includes('/node_modules/vooks/') ||
+            normalizedId.includes('/node_modules/@css-render/')
           ) {
             return 'naive-ui'
           }
-          if (id.includes('/chart.js/')) {
+          if (
+            normalizedId.includes('/node_modules/vue/') ||
+            normalizedId.includes('/node_modules/@vue/') ||
+            normalizedId.includes('/node_modules/pinia/') ||
+            normalizedId.includes('/node_modules/vue-router/')
+          ) {
+            return 'framework'
+          }
+          if (normalizedId.includes('/node_modules/chart.js/')) {
             return 'charts'
           }
-          if (id.includes('/@headlessui/')) {
+          if (normalizedId.includes('/node_modules/@headlessui/')) {
             return 'headlessui'
           }
-          if (id.includes('/marked/')) {
+          if (normalizedId.includes('/node_modules/marked/')) {
             return 'markdown'
           }
           return 'vendor'
@@ -60,4 +63,4 @@ export default defineConfig({
       }
     }
   }
-})
+}))

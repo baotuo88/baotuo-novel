@@ -1,6 +1,6 @@
 // AIMETA P=更新API客户端_更新日志接口|R=更新日志查询|NR=不含UI逻辑|E=api:updates|X=internal|A=updatesApi对象|D=axios|S=net|RD=./README.ai
 // Using a relative path to avoid potential alias issues
-import { API_BASE_URL } from './admin';
+import { API_BASE_URL } from './config';
 
 // A simplified request function for public endpoints that don't require authentication.
 const publicRequest = async (url: string, options: RequestInit = {}) => {

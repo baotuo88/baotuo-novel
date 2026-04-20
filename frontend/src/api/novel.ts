@@ -1,11 +1,10 @@
 // AIMETA P=小说API客户端_小说和章节接口|R=小说CRUD_章节管理_生成|NR=不含UI逻辑|E=api:novel|X=internal|A=novelApi对象|D=axios|S=net|RD=./README.ai
 import { useAuthStore } from '@/stores/auth'
 import router from '@/router'
+import { API_BASE_URL, API_PREFIX, WRITER_API_PREFIX } from './config'
 
-// API 配置
-// 在生产环境中使用相对路径，在开发环境中使用绝对路径
-export const API_BASE_URL = import.meta.env.MODE === 'production' ? '' : 'http://127.0.0.1:8000'
-export const API_PREFIX = '/api'
+// 对外保持兼容导出，避免其它模块引用路径变更
+export { API_BASE_URL, API_PREFIX } from './config'
 const DEFAULT_REQUEST_TIMEOUT_MS = Math.max(
   5000,
   Number(import.meta.env.VITE_API_TIMEOUT_MS || 95000)
@@ -769,7 +768,7 @@ export interface ForeshadowingAnalysisResponse {
 
 // API 函数
 const NOVELS_BASE = `${API_BASE_URL}${API_PREFIX}/novels`
-const WRITER_PREFIX = '/api/writer'
+const WRITER_PREFIX = WRITER_API_PREFIX
 const WRITER_BASE = `${API_BASE_URL}${WRITER_PREFIX}/novels`
 
 export class NovelAPI {
