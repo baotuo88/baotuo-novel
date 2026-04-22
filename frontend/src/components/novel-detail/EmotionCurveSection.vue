@@ -10,7 +10,9 @@
         </div>
         <div>
           <h3 class="md-title-medium" style="color: var(--md-on-surface);">情感曲线</h3>
-          <p class="md-body-small" style="color: var(--md-on-surface-variant);">追踪章节情感变化</p>
+          <p class="md-body-small" style="color: var(--md-on-surface-variant);">
+            追踪章节情感变化 · {{ analysisMode === 'enhanced' ? '增强分析' : '基础分析' }}
+          </p>
         </div>
       </div>
       <div class="flex items-center gap-2">
@@ -154,29 +156,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
+import { NovelAPI, type EmotionCurveResponse, type EmotionPoint } from '@/api/novel'
 import Chart from 'chart.js/auto'
 
-interface EmotionPoint {
-  chapter_number: number
-  title: string
-  emotion_type: string
-  intensity: number
-  narrative_phase?: string
-  description: string
-}
-
-interface EmotionCurveResponse {
-  project_id: string
-  project_title: string
-  total_chapters: number
-  emotion_points: EmotionPoint[]
-  average_intensity: number
-  emotion_distribution: Record<string, number>
-}
-
 const route = useRoute()
-const authStore = useAuthStore()
 const projectId = route.params.id as string
 
 const chartCanvas = ref<HTMLCanvasElement | null>(null)
@@ -186,6 +169,7 @@ const emotionPoints = ref<EmotionPoint[]>([])
 const totalChapters = ref(0)
 const averageIntensity = ref(0)
 const emotionDistribution = ref<Record<string, number>>({})
+const analysisMode = ref<'basic' | 'enhanced'>('basic')
 let chartInstance: any = null
 
 const EMOTION_KEY_MAP: { [key: string]: string } = {
@@ -247,45 +231,13 @@ const fetchEmotionData = async (useAI = false) => {
   error.value = null
   
   try {
-    const endpoint = useAI 
-      ? `/api/analytics/${projectId}/analyze-emotion-ai`
-      : `/api/analytics/${projectId}/emotion-curve`
-    
-    const method = useAI ? 'POST' : 'GET'
-    
-    const response = await fetch(endpoint, {
-      method,
-      headers: {
-        'Authorization': `Bearer ${authStore.token}`,
-        'Content-Type': 'application/json'
-      }
-    })
-    
-    if (!response.ok) {
-      let errorMessage = '获取情感数据失败'
-      try {
-        const errorData = await response.json()
-        // 处理422错误（参数校验失败）
-        if (response.status === 422 && errorData.detail) {
-          if (Array.isArray(errorData.detail)) {
-            errorMessage = errorData.detail.map((d: any) => d.msg).join('; ')
-          } else if (typeof errorData.detail === 'string') {
-            errorMessage = errorData.detail
-          }
-        } else if (errorData.detail) {
-          errorMessage = errorData.detail
-        }
-      } catch (e) {
-        console.error('Error parsing error response:', e)
-      }
-      throw new Error(errorMessage)
-    }
-    
-    const data: EmotionCurveResponse = await response.json()
+    const nextMode = useAI ? 'enhanced' : 'basic'
+    const data: EmotionCurveResponse = await NovelAPI.getEmotionCurve(projectId, nextMode)
     emotionPoints.value = data.emotion_points
     totalChapters.value = data.total_chapters
     averageIntensity.value = parseFloat(data.average_intensity.toFixed(2))
     emotionDistribution.value = data.emotion_distribution
+    analysisMode.value = nextMode
 
     // 确保在数据加载后更新图表
     nextTick(() => {

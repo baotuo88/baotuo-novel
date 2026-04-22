@@ -235,36 +235,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, h, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useNovelDetailSections } from '@/composables/useNovelDetailSections'
 import { useNovelStore } from '@/stores/novel'
 import { NovelAPI } from '@/api/novel'
-import { AdminAPI } from '@/api/admin'
-import type { NovelProject, NovelSectionResponse, NovelSectionType, AllSectionType } from '@/api/novel'
+import type { NovelProject } from '@/api/novel'
 import { formatDateTime } from '@/utils/date'
 import BlueprintEditModal from '@/components/BlueprintEditModal.vue'
-import OverviewSection from '@/components/novel-detail/OverviewSection.vue'
-import WorldSettingSection from '@/components/novel-detail/WorldSettingSection.vue'
-import CharactersSection from '@/components/novel-detail/CharactersSection.vue'
-import RelationshipsSection from '@/components/novel-detail/RelationshipsSection.vue'
-import ChapterOutlineSection from '@/components/novel-detail/ChapterOutlineSection.vue'
-import ChaptersSection from '@/components/novel-detail/ChaptersSection.vue'
-import EmotionCurveSection from '@/components/novel-detail/EmotionCurveSection.vue'
-import ForeshadowingSection from '@/components/novel-detail/ForeshadowingSection.vue'
-import TimelineSection from '@/components/novel-detail/TimelineSection.vue'
-import TerminologySection from '@/components/novel-detail/TerminologySection.vue'
-import WorldGraphSection from '@/components/novel-detail/WorldGraphSection.vue'
-import QualityDashboardSection from '@/components/novel-detail/QualityDashboardSection.vue'
-import PublishCenterSection from '@/components/novel-detail/PublishCenterSection.vue'
-import MaterialLibrarySection from '@/components/novel-detail/MaterialLibrarySection.vue'
-import ProjectBackupSection from '@/components/novel-detail/ProjectBackupSection.vue'
-import GlobalSearchSection from '@/components/novel-detail/GlobalSearchSection.vue'
+import type { SectionKey } from '@/components/novel-detail/sectionRegistry'
 
 interface Props {
   isAdmin?: boolean
 }
-
-type SectionKey = AllSectionType
 
 const props = withDefaults(defineProps<Props>(), {
   isAdmin: false
@@ -276,237 +259,6 @@ const novelStore = useNovelStore()
 
 const projectId = route.params.id as string
 const isSidebarOpen = ref(typeof window !== 'undefined' ? window.innerWidth >= 1024 : true)
-
-const sections: Array<{ key: SectionKey; label: string; description: string }> = [
-  { key: 'overview', label: '项目概览', description: '定位与整体梗概' },
-  { key: 'world_setting', label: '世界设定', description: '规则、地点与阵营' },
-  { key: 'characters', label: '主要角色', description: '人物性格与目标' },
-  { key: 'relationships', label: '人物关系', description: '角色之间的联系' },
-  ...(!props.isAdmin
-    ? [
-        { key: 'world_graph' as SectionKey, label: '世界图谱', description: '结构树与关系网' },
-        { key: 'quality_dashboard' as SectionKey, label: '质量看板', description: '一致性与闭环质量' },
-        { key: 'publish_center' as SectionKey, label: '发布中心', description: '多格式导出与发布' },
-        { key: 'material_library' as SectionKey, label: '素材库', description: '灵感与资料统一管理' },
-        { key: 'global_search' as SectionKey, label: '全局搜索', description: '跨模块统一检索入口' },
-        { key: 'project_backup' as SectionKey, label: '备份恢复', description: '项目导入导出与恢复' },
-      ]
-    : []),
-  { key: 'timeline', label: '故事时间线', description: '章节事件与时间锚点' },
-  { key: 'terminology', label: '术语词典', description: '名称统一与生成约束' },
-  { key: 'chapter_outline', label: '章节大纲', description: props.isAdmin ? '故事章节规划' : '故事结构规划' },
-  { key: 'chapters', label: '章节内容', description: props.isAdmin ? '生成章节与正文' : '生成状态与摘要' },
-  { key: 'emotion_curve', label: '情感曲线', description: '追踪章节情感变化' },
-  { key: 'foreshadowing', label: '伏笔管理', description: '故事线索与回收' }
-]
-
-const sectionComponents: Record<SectionKey, any> = {
-  overview: OverviewSection,
-  world_setting: WorldSettingSection,
-  characters: CharactersSection,
-  relationships: RelationshipsSection,
-  world_graph: WorldGraphSection,
-  quality_dashboard: QualityDashboardSection,
-  publish_center: PublishCenterSection,
-  material_library: MaterialLibrarySection,
-  global_search: GlobalSearchSection,
-  project_backup: ProjectBackupSection,
-  timeline: TimelineSection,
-  terminology: TerminologySection,
-  chapter_outline: ChapterOutlineSection,
-  chapters: ChaptersSection,
-  emotion_curve: EmotionCurveSection,
-  foreshadowing: ForeshadowingSection
-}
-
-// Section icons as functional components
-const getSectionIcon = (key: SectionKey) => {
-  const icons: Record<SectionKey, any> = {
-    overview: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('rect', { x: 3, y: 3, width: 18, height: 18, rx: 2 }),
-      h('line', { x1: 3, y1: 9, x2: 21, y2: 9 }),
-      h('line', { x1: 9, y1: 21, x2: 9, y2: 9 })
-    ]),
-    world_setting: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('circle', { cx: 12, cy: 12, r: 10 }),
-      h('path', { d: 'M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z' })
-    ]),
-    characters: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('path', { d: 'M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2' }),
-      h('circle', { cx: 9, cy: 7, r: 4 }),
-      h('path', { d: 'M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75' })
-    ]),
-    relationships: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('path', { d: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2' }),
-      h('circle', { cx: 9, cy: 7, r: 4 }),
-      h('path', { d: 'M22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75' })
-    ]),
-    world_graph: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('circle', { cx: 6, cy: 6, r: 2 }),
-      h('circle', { cx: 18, cy: 6, r: 2 }),
-      h('circle', { cx: 12, cy: 18, r: 2 }),
-      h('path', { d: 'M8 6h8M7.5 7.2l3.8 8M16.5 7.2l-3.8 8' })
-    ]),
-    quality_dashboard: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('path', { d: 'M4 19h16' }),
-      h('path', { d: 'M7 19V9m5 10V5m5 14v-7' }),
-      h('path', { d: 'M4 5h16' }),
-    ]),
-    publish_center: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('path', { d: 'M12 3v12' }),
-      h('path', { d: 'M7 10l5 5 5-5' }),
-      h('rect', { x: 4, y: 17, width: 16, height: 4, rx: 1.5 })
-    ]),
-    material_library: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('path', { d: 'M4 5h16v14H4z' }),
-      h('path', { d: 'M8 9h8M8 13h8M8 17h4' })
-    ]),
-    global_search: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('circle', { cx: 11, cy: 11, r: 7 }),
-      h('path', { d: 'M21 21l-4.35-4.35' }),
-    ]),
-    project_backup: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('path', { d: 'M12 3v12' }),
-      h('path', { d: 'M8 7l4-4 4 4' }),
-      h('path', { d: 'M5 14v5h14v-5' })
-    ]),
-    timeline: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('circle', { cx: 5, cy: 6, r: 1.5 }),
-      h('circle', { cx: 5, cy: 12, r: 1.5 }),
-      h('circle', { cx: 5, cy: 18, r: 1.5 }),
-      h('path', { d: 'M8 6h12M8 12h12M8 18h12' })
-    ]),
-    terminology: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('path', { d: 'M4 4h16v16H4z' }),
-      h('path', { d: 'M8 8h8M8 12h8M8 16h5' })
-    ]),
-    chapter_outline: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('line', { x1: 8, y1: 6, x2: 21, y2: 6 }),
-      h('line', { x1: 8, y1: 12, x2: 21, y2: 12 }),
-      h('line', { x1: 8, y1: 18, x2: 21, y2: 18 }),
-      h('line', { x1: 3, y1: 6, x2: 3.01, y2: 6 }),
-      h('line', { x1: 3, y1: 12, x2: 3.01, y2: 12 }),
-      h('line', { x1: 3, y1: 18, x2: 3.01, y2: 18 })
-    ]),
-    chapters: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('path', { d: 'M4 19.5A2.5 2.5 0 016.5 17H20' }),
-      h('path', { d: 'M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z' })
-    ]),
-    emotion_curve: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('path', { d: 'M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z' })
-    ]),
-    foreshadowing: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }, [
-      h('path', { d: 'M13 10V3L4 14h7v7l9-11h-7z' })
-    ])
-  }
-  return icons[key]
-}
-
-const sectionData = reactive<Partial<Record<SectionKey, any>>>({})
-const sectionLoading = reactive<Record<SectionKey, boolean>>({
-  overview: false,
-  world_setting: false,
-  characters: false,
-  relationships: false,
-  world_graph: false,
-  quality_dashboard: false,
-  publish_center: false,
-  material_library: false,
-  global_search: false,
-  project_backup: false,
-  timeline: false,
-  terminology: false,
-  chapter_outline: false,
-  chapters: false,
-  emotion_curve: false,
-  foreshadowing: false
-})
-const sectionError = reactive<Record<SectionKey, string | null>>({
-  overview: null,
-  world_setting: null,
-  characters: null,
-  relationships: null,
-  world_graph: null,
-  quality_dashboard: null,
-  publish_center: null,
-  material_library: null,
-  global_search: null,
-  project_backup: null,
-  timeline: null,
-  terminology: null,
-  chapter_outline: null,
-  chapters: null,
-  emotion_curve: null,
-  foreshadowing: null
-})
-
-const overviewMeta = reactive<{ title: string; updated_at: string | null }>({
-  title: '加载中...',
-  updated_at: null
-})
-
-const activeSection = ref<SectionKey>('overview')
-const focusChapterNumber = ref<number | null>(null)
-const focusTimelineEventId = ref<number | null>(null)
-const focusForeshadowingId = ref<number | null>(null)
-const focusMaterialId = ref<string | null>(null)
-const focusTerm = ref<string | null>(null)
-const focusSearchQuery = ref<string | null>(null)
-
-const isSectionKey = (value: string): value is SectionKey => (
-  sections.some((section) => section.key === value)
-)
-
-const parseSectionFromQuery = (): SectionKey | null => {
-  const raw = route.query.section
-  if (typeof raw !== 'string') return null
-  return isSectionKey(raw) ? raw : null
-}
-
-const parseChapterFromQuery = (): number | null => {
-  const raw = route.query.chapter
-  if (typeof raw !== 'string') return null
-  const value = Number(raw)
-  if (!Number.isInteger(value) || value < 1) return null
-  return value
-}
-
-const parseTimelineEventIdFromQuery = (): number | null => {
-  const raw = route.query.timeline_event_id
-  if (typeof raw !== 'string') return null
-  const value = Number(raw)
-  if (!Number.isInteger(value) || value < 1) return null
-  return value
-}
-
-const parseForeshadowingIdFromQuery = (): number | null => {
-  const raw = route.query.foreshadowing_id
-  if (typeof raw !== 'string') return null
-  const value = Number(raw)
-  if (!Number.isInteger(value) || value < 1) return null
-  return value
-}
-
-const parseMaterialIdFromQuery = (): string | null => {
-  const raw = route.query.material_id
-  if (typeof raw !== 'string') return null
-  const value = raw.trim()
-  return value || null
-}
-
-const parseTermFromQuery = (): string | null => {
-  const raw = route.query.term
-  if (typeof raw !== 'string') return null
-  const value = raw.trim()
-  return value || null
-}
-
-const parseSearchQueryFromQuery = (): string | null => {
-  const raw = route.query.search_q
-  if (typeof raw !== 'string') return null
-  const value = raw.trim()
-  return value || null
-}
 
 // Modal state (user mode only)
 const isModalOpen = ref(false)
@@ -527,18 +279,29 @@ const formattedTitle = computed(() => {
   return title.startsWith('《') && title.endsWith('》') ? title : `《${title}》`
 })
 
-const componentContainerClass = computed(() => {
-  const fillSections: SectionKey[] = ['chapters']
-  return fillSections.includes(activeSection.value)
-    ? 'flex-1 min-h-0 h-full flex flex-col overflow-hidden'
-    : 'overflow-y-auto'
-})
-
-const contentCardClass = computed(() => {
-  const fillSections: SectionKey[] = ['chapters']
-  return fillSections.includes(activeSection.value)
-    ? 'overflow-hidden'
-    : 'overflow-visible'
+const {
+  activeSection,
+  componentContainerClass,
+  componentProps,
+  contentCardClass,
+  currentComponent,
+  currentError,
+  getSectionIcon,
+  handleGraphNavigate,
+  handleWorldGraphRefresh,
+  initializeFromRoute,
+  isSectionLoading,
+  loadSection,
+  overviewMeta,
+  reloadSection,
+  sectionData,
+  sections,
+  switchSection: switchSectionInternal,
+} = useNovelDetailSections({
+  isAdmin: props.isAdmin,
+  projectId,
+  route,
+  router,
 })
 
 // 懒加载完整项目（仅在需要编辑时）
@@ -557,98 +320,6 @@ const handleResize = () => {
   isSidebarOpen.value = window.innerWidth >= 1024
 }
 
-const loadSection = async (section: SectionKey, force = false) => {
-  if (!projectId) return
-
-  if (section === 'world_graph') {
-    if (!force && sectionData[section]) return
-    sectionLoading[section] = true
-    sectionError[section] = null
-    try {
-      const response = await NovelAPI.getWorldGraph(projectId)
-      sectionData[section] = response
-    } catch (error) {
-      console.error('加载世界图谱失败:', error)
-      sectionError[section] = error instanceof Error ? error.message : '加载失败'
-    } finally {
-      sectionLoading[section] = false
-    }
-    return
-  }
-
-  if (section === 'quality_dashboard') {
-    if (!force && sectionData[section]) return
-    sectionLoading[section] = true
-    sectionError[section] = null
-    try {
-      const response = await NovelAPI.getProjectQualityDashboard(projectId)
-      sectionData[section] = response
-    } catch (error) {
-      console.error('加载质量看板失败:', error)
-      sectionError[section] = error instanceof Error ? error.message : '加载失败'
-    } finally {
-      sectionLoading[section] = false
-    }
-    return
-  }
-
-  if (section === 'publish_center') {
-    if (!force && sectionData[section]) return
-    sectionLoading[section] = true
-    sectionError[section] = null
-    try {
-      const response = await NovelAPI.getPublishSummary(projectId)
-      sectionData[section] = response
-    } catch (error) {
-      console.error('加载发布中心失败:', error)
-      sectionError[section] = error instanceof Error ? error.message : '加载失败'
-    } finally {
-      sectionLoading[section] = false
-    }
-    return
-  }
-  
-  // 分析型Section使用独立的API，不需要在这里加载
-  const analysisSections: SectionKey[] = ['emotion_curve', 'foreshadowing', 'timeline', 'terminology', 'publish_center', 'material_library', 'global_search', 'project_backup']
-  if (analysisSections.includes(section)) {
-    return
-  }
-  
-  if (!force && sectionData[section]) {
-    return
-  }
-
-  sectionLoading[section] = true
-  sectionError[section] = null
-  try {
-    const response: NovelSectionResponse = props.isAdmin
-      ? await AdminAPI.getNovelSection(projectId, section as NovelSectionType)
-      : await NovelAPI.getSection(projectId, section as NovelSectionType)
-    sectionData[section] = response.data
-    if (section === 'overview') {
-      overviewMeta.title = response.data?.title || overviewMeta.title
-      overviewMeta.updated_at = response.data?.updated_at || null
-    }
-  } catch (error) {
-    console.error('加载模块失败:', error)
-    sectionError[section] = error instanceof Error ? error.message : '加载失败'
-  } finally {
-    sectionLoading[section] = false
-  }
-}
-
-const reloadSection = (section: SectionKey, force = false) => {
-  loadSection(section, force)
-}
-
-const switchSection = (section: SectionKey) => {
-  activeSection.value = section
-  if (typeof window !== 'undefined' && window.innerWidth < 1024) {
-    isSidebarOpen.value = false
-  }
-  loadSection(section)
-}
-
 const goBack = () => router.push(props.isAdmin ? '/admin' : '/workspace')
 
 const goToWritingDesk = async () => {
@@ -659,87 +330,11 @@ const goToWritingDesk = async () => {
   router.push(path)
 }
 
-const currentComponent = computed(() => sectionComponents[activeSection.value])
-const isSectionLoading = computed(() => sectionLoading[activeSection.value])
-const currentError = computed(() => sectionError[activeSection.value])
-
-const componentProps = computed(() => {
-  const data = sectionData[activeSection.value]
-  const editable = !props.isAdmin
-
-  switch (activeSection.value) {
-    case 'overview':
-      return { data: data || null, editable }
-    case 'world_setting':
-      return { data: data || null, editable }
-    case 'characters':
-      return { data: data || null, editable }
-    case 'relationships':
-      return { data: data || null, editable }
-    case 'world_graph':
-      return {
-        data: data || null,
-        editable,
-        projectId
-      }
-    case 'quality_dashboard':
-      return {
-        data: data || null
-      }
-    case 'publish_center':
-      return {
-        data: data || null,
-        projectId
-      }
-    case 'material_library':
-      return {
-        projectId,
-        editable,
-        focusMaterialId: activeSection.value === 'material_library' ? focusMaterialId.value : null,
-        focusQuery: activeSection.value === 'material_library' ? focusSearchQuery.value : null
-      }
-    case 'global_search':
-      return {
-        projectId,
-        initialQuery: activeSection.value === 'global_search' ? focusSearchQuery.value : null
-      }
-    case 'project_backup':
-      return {
-        projectId
-      }
-    case 'timeline':
-      return {
-        editable,
-        projectId,
-        focusChapterNumber: activeSection.value === 'timeline' ? focusChapterNumber.value : null,
-        focusEventId: activeSection.value === 'timeline' ? focusTimelineEventId.value : null
-      }
-    case 'terminology':
-      return {
-        editable,
-        projectId,
-        focusTerm: activeSection.value === 'terminology' ? focusTerm.value : null,
-        focusQuery: activeSection.value === 'terminology' ? focusSearchQuery.value : null
-      }
-    case 'foreshadowing':
-      return {
-        editable,
-        projectId,
-        focusChapterNumber: activeSection.value === 'foreshadowing' ? focusChapterNumber.value : null,
-        focusForeshadowingId: activeSection.value === 'foreshadowing' ? focusForeshadowingId.value : null
-      }
-    case 'chapter_outline':
-      return { outline: data?.chapter_outline || [], editable }
-    case 'chapters':
-      return {
-        chapters: data?.chapters || [],
-        isAdmin: props.isAdmin,
-        focusChapterNumber: activeSection.value === 'chapters' ? focusChapterNumber.value : null
-      }
-    default:
-      return {}
-  }
-})
+const switchSection = (section: SectionKey) => {
+  switchSectionInternal(section, () => {
+    isSidebarOpen.value = false
+  })
+}
 
 const handleSectionEdit = (payload: { field: string; title: string; value: any }) => {
   if (props.isAdmin) return
@@ -788,38 +383,6 @@ const handleSave = async (data: { field: string; content: any }) => {
   } catch (error) {
     console.error('保存变更失败:', error)
   }
-}
-
-const handleWorldGraphRefresh = async () => {
-  await loadSection('world_graph', true)
-  await loadSection('relationships', true)
-  await loadSection('world_setting', true)
-}
-
-const handleGraphNavigate = async (payload: {
-  section: string
-  chapterNumber?: number
-  eventId?: number
-  foreshadowingId?: number
-  materialId?: string
-  term?: string
-  query?: string
-}) => {
-  const targetSection: SectionKey = isSectionKey(payload.section) ? payload.section : 'overview'
-  activeSection.value = targetSection
-  await loadSection(targetSection, true)
-  await router.replace({
-    query: {
-      ...route.query,
-      section: targetSection,
-      chapter: payload.chapterNumber ? String(payload.chapterNumber) : undefined,
-      timeline_event_id: payload.eventId ? String(payload.eventId) : undefined,
-      foreshadowing_id: payload.foreshadowingId ? String(payload.foreshadowingId) : undefined,
-      material_id: payload.materialId || undefined,
-      term: payload.term || undefined,
-      search_q: payload.query || undefined,
-    }
-  })
 }
 
 const startAddChapter = async () => {
@@ -873,16 +436,7 @@ onMounted(async () => {
     document.body.style.overflow = 'hidden'
   }
 
-  const initialSection = parseSectionFromQuery()
-  if (initialSection) {
-    activeSection.value = initialSection
-  }
-  focusChapterNumber.value = parseChapterFromQuery()
-  focusTimelineEventId.value = parseTimelineEventIdFromQuery()
-  focusForeshadowingId.value = parseForeshadowingIdFromQuery()
-  focusMaterialId.value = parseMaterialIdFromQuery()
-  focusTerm.value = parseTermFromQuery()
-  focusSearchQuery.value = parseSearchQueryFromQuery()
+  const initialSection = initializeFromRoute()
 
   // 只加载必要的 section 数据，不预加载完整项目
   await loadSection('overview', true)
@@ -901,31 +455,6 @@ onBeforeUnmount(() => {
     document.body.style.overflow = originalBodyOverflow.value || ''
   }
 })
-
-watch(
-  () => [
-    route.query.section,
-    route.query.chapter,
-    route.query.timeline_event_id,
-    route.query.foreshadowing_id,
-    route.query.material_id,
-    route.query.term,
-    route.query.search_q
-  ],
-  () => {
-    const targetSection = parseSectionFromQuery()
-    if (targetSection && targetSection !== activeSection.value) {
-      activeSection.value = targetSection
-      void loadSection(targetSection)
-    }
-    focusChapterNumber.value = parseChapterFromQuery()
-    focusTimelineEventId.value = parseTimelineEventIdFromQuery()
-    focusForeshadowingId.value = parseForeshadowingIdFromQuery()
-    focusMaterialId.value = parseMaterialIdFromQuery()
-    focusTerm.value = parseTermFromQuery()
-    focusSearchQuery.value = parseSearchQueryFromQuery()
-  }
-)
 </script>
 
 <style scoped>

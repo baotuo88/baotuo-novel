@@ -1,7 +1,7 @@
 # AIMETA P=提示词模式_提示模板请求响应|R=提示词结构|NR=不含业务逻辑|E=PromptSchema|X=internal|A=Pydantic模式|D=pydantic|S=none|RD=./README.ai
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PromptBase(BaseModel):
@@ -31,9 +31,7 @@ class PromptRead(PromptBase):
     """对外暴露的 Prompt 数据结构。"""
 
     id: int
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
     @classmethod
     def model_validate(cls, obj: Any, *args: Any, **kwargs: Any) -> "PromptRead":  # type: ignore[override]

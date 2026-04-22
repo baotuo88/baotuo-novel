@@ -91,6 +91,22 @@
                 {{ formatFailureMessage(item) }}
               </div>
 
+              <div v-if="item.queue_state === 'failed'" class="task-recovery mt-3">
+                <div class="task-recovery-title">推荐处理</div>
+                <div class="task-recovery-summary">{{ buildTaskRecoveryPlan(item).summary }}</div>
+                <div class="task-recovery-actions">
+                  <button
+                    v-for="action in buildTaskRecoveryPlan(item).actions"
+                    :key="`${item.task_id}-${action.key}`"
+                    class="md-btn md-btn-tonal md-ripple"
+                    :disabled="actionLoading[item.task_id]"
+                    @click="runRecoveryAction(item, action)"
+                  >
+                    {{ action.label }}
+                  </button>
+                </div>
+              </div>
+
               <div class="task-actions mt-3">
                 <button class="md-btn md-btn-text md-ripple" @click="emit('jumpChapter', item.chapter_number)">
                   定位章节
@@ -129,8 +145,10 @@
 <script setup lang="ts">
 import { onUnmounted, reactive, ref, watch } from 'vue'
 import { NovelAPI, type WriterTaskCenterItem, type WriterTaskCenterResponse } from '@/api/novel'
+import { httpFetchResponse } from '@/api/http'
 import { globalAlert } from '@/composables/useAlert'
 import { useAuthStore } from '@/stores/auth'
+import { buildTaskRecoveryPlan, type TaskRecoveryAction } from '@/components/writing-desk/taskRecovery'
 
 interface Props {
   show: boolean
@@ -286,16 +304,19 @@ const startTaskStream = async () => {
       status_group: statusGroup.value,
       interval_seconds: 3,
     })
-    const response = await fetch(streamUrl, {
+    const response = await httpFetchResponse(streamUrl, {
       method: 'GET',
+      token: authStore.token,
       headers: {
-        Authorization: `Bearer ${authStore.token}`,
         Accept: 'text/event-stream',
       },
       signal: controller.signal,
+      onUnauthorized: async () => {
+        authStore.logout()
+      }
     })
-    if (!response.ok || !response.body) {
-      throw new Error(`任务流连接失败，状态码: ${response.status}`)
+    if (!response.body) {
+      throw new Error('任务流连接失败，响应体为空')
     }
 
     streamConnected.value = true
@@ -376,15 +397,39 @@ const retryTask = async (item: WriterTaskCenterItem) => {
   if (!props.projectId || !item.can_retry) return
   actionLoading[item.task_id] = true
   try {
-    const result = await NovelAPI.retryWriterTask(props.projectId, item.chapter_number, {
+    const defaultPayload = buildTaskRecoveryPlan(item).actions[0]?.payload || {
       force: true,
       resume_from_checkpoint: true,
-    })
+    }
+    const result = await NovelAPI.retryWriterTask(props.projectId, item.chapter_number, defaultPayload)
     globalAlert.showSuccess(result.message || '重试任务已提交')
     await fetchTasks()
     emit('taskUpdated', item.chapter_number)
   } catch (error) {
     globalAlert.showError(`重试失败: ${error instanceof Error ? error.message : '未知错误'}`)
+  } finally {
+    actionLoading[item.task_id] = false
+  }
+}
+
+const runRecoveryAction = async (item: WriterTaskCenterItem, action: TaskRecoveryAction) => {
+  if (!props.projectId || !action.payload) return
+  if (action.requiresConfirm) {
+    const confirmed = await globalAlert.showConfirm(
+      `确认对第${item.chapter_number}章执行「${action.label}」？`,
+      '推荐修复动作'
+    )
+    if (!confirmed) return
+  }
+
+  actionLoading[item.task_id] = true
+  try {
+    const result = await NovelAPI.retryWriterTask(props.projectId, item.chapter_number, action.payload)
+    globalAlert.showSuccess(result.message || `${action.label} 已提交`)
+    await fetchTasks()
+    emit('taskUpdated', item.chapter_number)
+  } catch (error) {
+    globalAlert.showError(`${action.label}失败: ${error instanceof Error ? error.message : '未知错误'}`)
   } finally {
     actionLoading[item.task_id] = false
   }
@@ -493,6 +538,32 @@ onUnmounted(() => {
 .task-list {
   display: grid;
   gap: 12px;
+}
+
+.task-recovery {
+  border-radius: var(--md-radius-md);
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--md-secondary-container) 52%, transparent);
+}
+
+.task-recovery-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--md-on-secondary-container);
+}
+
+.task-recovery-summary {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--md-on-secondary-container);
+}
+
+.task-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .task-card {

@@ -184,6 +184,7 @@ const rollbackToCompareVersion = async () => {
       version_id: compareVersionId.value,
       reason: 'ui_rollback'
     })
+    await NovelAPI.invalidateAnalysisCache(props.projectId).catch(() => undefined)
     globalAlert.showSuccess(result.message || '版本回滚成功')
     await loadVersions()
     emit('rolledBack', props.chapterNumber)

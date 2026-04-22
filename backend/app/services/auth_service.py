@@ -1,4 +1,4 @@
-# AIMETA P=认证服务_登录注册业务逻辑|R=登录_注册_令牌|NR=不含用户管理|E=AuthService|X=internal|A=服务类|D=jose,passlib|S=db|RD=./README.ai
+# AIMETA P=认证服务_登录注册业务逻辑|R=登录_注册_令牌|NR=不含用户管理|E=AuthService|X=internal|A=服务类|D=jose,bcrypt|S=db|RD=./README.ai
 import asyncio
 import logging
 import random
@@ -12,6 +12,7 @@ from email.header import Header
 from email.mime.text import MIMEText
 from email.utils import formataddr, parseaddr
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 
 import smtplib
 
@@ -341,6 +342,23 @@ class AuthService:
     # OAuth 对接示例（以 Linux.do 为例）
     # ------------------------------------------------------------------
 
+    async def _resolve_linuxdo_username(self, external_id: str, raw_username: Optional[str]) -> str:
+        base_username = (raw_username or "").strip() or external_id.replace(":", "_")
+        base_username = base_username[:64]
+        if len(base_username) < 3:
+            base_username = f"user_{base_username}".strip("_")[:64]
+
+        candidate = base_username
+        suffix = external_id.split(":", 1)[-1][-8:] or secrets.token_hex(4)
+        for attempt in range(10):
+            existing = await self.user_repo.get_by_username(candidate)
+            if existing is None or existing.external_id == external_id:
+                return candidate
+            suffix_part = f"_{suffix}" if attempt == 0 else f"_{suffix}{attempt}"
+            candidate = f"{base_username[: max(1, 64 - len(suffix_part))]}{suffix_part}"
+
+        raise HTTPException(status_code=409, detail="第三方账号用户名冲突，请联系管理员处理")
+
     async def handle_linuxdo_callback(self, code: str) -> Token:
         if not await self.is_linuxdo_login_enabled():
             raise HTTPException(status_code=403, detail="未启用 Linux.do 登录")
@@ -380,14 +398,24 @@ class AuthService:
         user = await self.user_repo.get_by_external_id(external_id)
         if user is None:
             placeholder_password = secrets.token_urlsafe(16)
+            resolved_username = await self._resolve_linuxdo_username(external_id, data.get("username"))
+            email = data.get("email")
+            if email:
+                existing_by_email = await self.user_repo.get_by_email(email)
+                if existing_by_email and existing_by_email.external_id != external_id:
+                    email = None
             user = User(
-                username=data["username"],
-                email=data.get("email"),
+                username=resolved_username,
+                email=email,
                 external_id=external_id,
                 hashed_password=hash_password(placeholder_password),
             )
             self.session.add(user)
-            await self.session.commit()
+            try:
+                await self.session.commit()
+            except IntegrityError as exc:
+                await self.session.rollback()
+                raise HTTPException(status_code=409, detail="第三方登录账号与现有账号冲突，请联系管理员处理") from exc
 
         return await self.create_access_token(user)
 
@@ -425,6 +453,8 @@ class AuthService:
         )
 
     def requires_password_reset(self, user: User | UserInDB) -> bool:
+        if not settings.admin_default_password:
+            return False
         if not user.is_admin:
             return False
         if user.username != settings.admin_default_username:
@@ -445,7 +475,7 @@ class AuthService:
         if verify_password(new_password, user.hashed_password):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与当前密码相同")
 
-        if username == settings.admin_default_username and new_password == settings.admin_default_password:
+        if settings.admin_default_password and username == settings.admin_default_username and new_password == settings.admin_default_password:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能为默认密码")
 
         user.hashed_password = hash_password(new_password)
@@ -462,7 +492,11 @@ class AuthService:
         if verify_password(payload.new_password, user.hashed_password):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与当前密码相同")
 
-        if user.username == settings.admin_default_username and payload.new_password == settings.admin_default_password:
+        if (
+            settings.admin_default_password
+            and user.username == settings.admin_default_username
+            and payload.new_password == settings.admin_default_password
+        ):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能为默认密码")
 
         user.hashed_password = hash_password(payload.new_password)

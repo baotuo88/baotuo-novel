@@ -285,6 +285,7 @@ export const useNovelStore = defineStore('novel', () => {
         chapterNumber,
         versionIndex
       )
+      await NovelAPI.invalidateAnalysisCache(currentProject.value.id).catch(() => undefined)
       currentProject.value = updatedProject // 更新 store
     } catch (err) {
       error.value = err instanceof Error ? err.message : '选择章节版本失败'
@@ -396,6 +397,7 @@ export const useNovelStore = defineStore('novel', () => {
     }
     try {
       const updatedChapter = await NovelAPI.editChapterContent(projectId, chapterNumber, content)
+      await NovelAPI.invalidateAnalysisCache(projectId).catch(() => undefined)
       if (pendingChapterEdits.get(requestKey) !== content) {
         return
       }

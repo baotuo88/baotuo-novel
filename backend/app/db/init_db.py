@@ -33,6 +33,10 @@ async def init_db() -> None:
     async with AsyncSessionLocal() as session:
         admin_exists = await session.execute(select(User).where(User.is_admin.is_(True)))
         if not admin_exists.scalars().first():
+            if not settings.admin_default_password:
+                raise RuntimeError(
+                    "未检测到管理员账号，且未配置 ADMIN_DEFAULT_PASSWORD，无法安全初始化默认管理员"
+                )
             logger.warning("未检测到管理员账号，正在创建默认管理员 ...")
             admin_user = User(
                 username=settings.admin_default_username,

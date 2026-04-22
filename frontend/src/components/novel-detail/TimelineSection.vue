@@ -287,8 +287,9 @@ const saveTimeline = async () => {
       .sort((a, b) => a.chapter_number - b.chapter_number)
 
     await NovelAPI.saveProjectTimeline(projectId, payload)
+    await NovelAPI.invalidateAnalysisCache(projectId).catch(() => undefined)
     await loadTimeline()
-    saveHint.value = '时间线已保存'
+    saveHint.value = '时间线已保存，综合诊断缓存已刷新'
   } catch (err) {
     error.value = err instanceof Error ? err.message : '保存失败'
   } finally {

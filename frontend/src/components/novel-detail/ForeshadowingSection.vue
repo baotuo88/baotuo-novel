@@ -392,6 +392,7 @@ const createForeshadowing = async () => {
       author_note: ''
     }
     showCreateForm.value = false
+    await NovelAPI.invalidateAnalysisCache(projectId).catch(() => undefined)
     await loadAllData()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '创建伏笔失败'
@@ -432,6 +433,7 @@ const confirmResolve = async () => {
       quality_score: resolveDraft.value.quality_score
     })
     resolveTargetId.value = null
+    await NovelAPI.invalidateAnalysisCache(projectId).catch(() => undefined)
     await loadAllData()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '回收伏笔失败'
@@ -450,6 +452,7 @@ const abandonForeshadowing = async (item: ForeshadowingBoardItem) => {
     await NovelAPI.abandonForeshadowing(projectId, item.id, {
       reason: reason.trim() || undefined
     })
+    await NovelAPI.invalidateAnalysisCache(projectId).catch(() => undefined)
     await loadAllData()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '放弃伏笔失败'

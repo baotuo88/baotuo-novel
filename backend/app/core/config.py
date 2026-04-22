@@ -69,7 +69,11 @@ class Settings(BaseSettings):
 
     # -------------------- 管理员初始化配置 --------------------
     admin_default_username: str = Field(default="admin", validation_alias="ADMIN_DEFAULT_USERNAME", description="默认管理员用户名")
-    admin_default_password: str = Field(default="ChangeMe123!", validation_alias="ADMIN_DEFAULT_PASSWORD", description="默认管理员密码")
+    admin_default_password: Optional[str] = Field(
+        default=None,
+        validation_alias="ADMIN_DEFAULT_PASSWORD",
+        description="默认管理员密码；首次初始化管理员时必须显式配置",
+    )
     admin_default_email: Optional[str] = Field(default=None, validation_alias="ADMIN_DEFAULT_EMAIL", description="默认管理员邮箱")
 
     # -------------------- LLM 相关配置 --------------------
@@ -271,6 +275,14 @@ class Settings(BaseSettings):
             raise ValueError("LOGGING_LEVEL 仅支持 CRITICAL/ERROR/WARNING/INFO/DEBUG/NOTSET")
         return candidate
 
+    @field_validator("admin_default_password", mode="before")
+    @classmethod
+    def _normalize_admin_default_password(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        candidate = value.strip()
+        return candidate or None
+
     @property
     def sqlalchemy_database_uri(self) -> str:
         """生成 SQLAlchemy 兼容的异步连接串，数据库类型由 DB_PROVIDER 控制。"""
@@ -339,6 +351,10 @@ class Settings(BaseSettings):
     def vector_store_enabled(self) -> bool:
         """是否已经配置向量库，用于在业务逻辑中快速判断。"""
         return bool(self.vector_db_url)
+
+    @property
+    def uses_legacy_default_admin_password(self) -> bool:
+        return self.admin_default_password == "ChangeMe123!"
 
 
 @lru_cache

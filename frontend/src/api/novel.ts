@@ -2,156 +2,26 @@
 import { useAuthStore } from '@/stores/auth'
 import router from '@/router'
 import { API_BASE_URL, API_PREFIX, WRITER_API_PREFIX } from './config'
+import { httpRequest, downloadFile } from './http'
 
 // 对外保持兼容导出，避免其它模块引用路径变更
 export { API_BASE_URL, API_PREFIX } from './config'
-const DEFAULT_REQUEST_TIMEOUT_MS = Math.max(
-  5000,
-  Number(import.meta.env.VITE_API_TIMEOUT_MS || 95000)
-)
 
 type RequestOptions = RequestInit & {
   timeoutMs?: number
 }
 
-const isLikelyHtml = (value: string): boolean => {
-  const trimmed = value.trim().toLowerCase()
-  if (!trimmed) return false
-  return (
-    trimmed.startsWith('<!doctype html') ||
-    trimmed.startsWith('<html') ||
-    (trimmed.startsWith('<') && trimmed.includes('</'))
-  )
-}
-
-const extractErrorMessage = async (response: Response): Promise<string> => {
-  const rawText = await response.text().catch(() => '')
-  if (!rawText) return ''
-
-  try {
-    const errorData = JSON.parse(rawText)
-    const detail = errorData?.detail || errorData?.message || ''
-    return typeof detail === 'string' ? detail.trim() : ''
-  } catch {
-    const trimmed = rawText.trim()
-    if (!trimmed || isLikelyHtml(trimmed)) {
-      return ''
-    }
-    return trimmed.slice(0, 240)
-  }
-}
-
-const normalizeErrorMessage = (status: number, detail: string): string => {
-  if ([502, 503, 504].includes(status)) {
-    return '上游 AI 服务响应超时或暂时不可用，请稍后重试'
-  }
-  if (status === 429) {
-    return detail || '请求过于频繁，请稍后再试'
-  }
-  if (status >= 500) {
-    return detail || '服务器内部错误，请稍后重试'
-  }
-  return detail || `请求失败，状态码: ${status}`
-}
-
-const parseResponsePayload = async <T>(response: Response): Promise<T> => {
-  if (response.status === 204) {
-    return null as T
-  }
-
-  const contentType = response.headers.get('content-type') || ''
-  if (contentType.includes('application/json')) {
-    return (await response.json()) as T
-  }
-
-  const text = await response.text()
-  if (!text.trim()) {
-    return null as T
-  }
-  try {
-    return JSON.parse(text) as T
-  } catch {
-    return text as T
-  }
-}
-
-const parseDownloadFilename = (contentDisposition: string | null, fallback: string): string => {
-  if (!contentDisposition) return fallback
-  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
-  if (utf8Match?.[1]) {
-    try {
-      return decodeURIComponent(utf8Match[1])
-    } catch {
-      return utf8Match[1]
-    }
-  }
-  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
-  if (plainMatch?.[1]) {
-    return plainMatch[1]
-  }
-  return fallback
-}
-
 // 统一的请求处理函数
 const request = async <T = any>(url: string, options: RequestOptions = {}): Promise<T> => {
   const authStore = useAuthStore()
-  const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-  const controller = new AbortController()
-  const timeoutId = globalThis.setTimeout(() => {
-    controller.abort(new Error('Request timeout'))
-  }, timeoutMs)
-
-  const headers = new Headers({
-    'Content-Type': 'application/json',
-    ...options.headers
+  return httpRequest<T>(url, {
+    ...options,
+    token: authStore.isAuthenticated ? authStore.token : null,
+    onUnauthorized: async () => {
+      authStore.logout()
+      await router.push('/login')
+    }
   })
-
-  // 如果 body 是 FormData，删除 Content-Type header，让浏览器自动设置（包含 boundary）
-  if (options.body instanceof FormData) {
-    headers.delete('Content-Type')
-  }
-
-  if (authStore.isAuthenticated && authStore.token) {
-    headers.set('Authorization', `Bearer ${authStore.token}`)
-  }
-
-  if (options.signal) {
-    if (options.signal.aborted) {
-      controller.abort()
-    } else {
-      options.signal.addEventListener('abort', () => controller.abort(), { once: true })
-    }
-  }
-
-  let response: Response
-  try {
-    response = await fetch(url, { ...options, headers, signal: controller.signal })
-  } catch (error) {
-    const isAbort = (error as DOMException)?.name === 'AbortError'
-    if (isAbort) {
-      if (options.signal?.aborted) {
-        throw new Error('请求已取消')
-      }
-      throw new Error(`请求超时（>${Math.ceil(timeoutMs / 1000)}秒），请稍后重试`)
-    }
-    throw new Error('网络连接失败，请检查网络或服务状态')
-  } finally {
-    globalThis.clearTimeout(timeoutId)
-  }
-
-  if (response.status === 401) {
-    // Token 失效或未授权
-    authStore.logout()
-    router.push('/login')
-    throw new Error('会话已过期，请重新登录')
-  }
-
-  if (!response.ok) {
-    const detail = await extractErrorMessage(response)
-    throw new Error(normalizeErrorMessage(response.status, detail))
-  }
-
-  return parseResponsePayload<T>(response)
 }
 
 // 类型定义
@@ -382,6 +252,7 @@ export type NovelSectionType = 'overview' | 'world_setting' | 'characters' | 're
 
 // 分析型Section（不属于NovelSectionType，使用独立的analytics API）
 export type AnalysisSectionType =
+  | 'comprehensive_diagnosis'
   | 'emotion_curve'
   | 'foreshadowing'
   | 'world_graph'
@@ -655,6 +526,159 @@ export interface ProjectQualityDashboard {
   recommendations: string[]
 }
 
+export interface ComprehensiveActionAnchor {
+  section: AllSectionType | string
+  chapter_number?: number | null
+  foreshadowing_id?: number | null
+  timeline_event_id?: number | null
+  term?: string | null
+  query?: string | null
+}
+
+export interface ComprehensiveActionItem {
+  id: string
+  title: string
+  summary: string
+  severity: string
+  category: string
+  anchor: ComprehensiveActionAnchor
+}
+
+export interface ComprehensiveForeshadowingItem {
+  id: number
+  chapter_number: number
+  content: string
+  status: string
+  type: string
+  priority_hint: string
+  keywords: string[]
+  related_characters: string[]
+}
+
+export interface ComprehensiveAnalysisResponse {
+  project_id: string
+  project_title: string
+  emotion_points: EnhancedEmotionPoint[]
+  trajectory: {
+    project_id: string
+    project_title: string
+    shape: string
+    shape_confidence: number
+    total_chapters: number
+    avg_intensity: number
+    intensity_range: [number, number]
+    volatility: number
+    peak_chapters: number[]
+    valley_chapters: number[]
+    turning_points: number[]
+    description: string
+    recommendations: string[]
+  }
+  guidance: {
+    project_id: string
+    project_title: string
+    current_chapter: number
+    overall_assessment: string
+    strengths: string[]
+    weaknesses: string[]
+    guidance_items: Array<{
+      type: string
+      priority: string
+      title: string
+      description: string
+      specific_suggestions: string[]
+      affected_chapters: number[]
+      examples: string[]
+    }>
+    next_chapter_suggestions: string[]
+    long_term_planning: string[]
+  }
+  quality_dashboard: ProjectQualityDashboard
+  foreshadowings: ComprehensiveForeshadowingItem[]
+  focus_actions: ComprehensiveActionItem[]
+}
+
+export interface EmotionPoint {
+  chapter_number: number
+  title: string
+  emotion_type: string
+  intensity: number
+  narrative_phase?: string | null
+  description: string
+}
+
+export interface EmotionCurveResponse {
+  project_id: string
+  project_title: string
+  total_chapters: number
+  emotion_points: EmotionPoint[]
+  average_intensity: number
+  emotion_distribution: Record<string, number>
+}
+
+interface EnhancedEmotionPoint {
+  chapter_number: number
+  chapter_id: string
+  title: string
+  primary_emotion: string
+  primary_intensity: number
+  secondary_emotions: Array<[string, number]>
+  narrative_phase: string
+  pace: string
+  is_turning_point: boolean
+  turning_point_type?: string | null
+  description: string
+}
+
+const ENHANCED_EMOTION_LABEL_MAP: Record<string, string> = {
+  joy: '喜悦',
+  sadness: '悲伤',
+  anger: '愤怒',
+  fear: '恐惧',
+  surprise: '惊讶',
+  anticipation: '期待',
+  trust: '信任',
+  neutral: '平静',
+}
+
+const normalizeEnhancedEmotionLabel = (emotion: string): string => {
+  const normalized = String(emotion || '').trim().toLowerCase()
+  return ENHANCED_EMOTION_LABEL_MAP[normalized] || emotion || '平静'
+}
+
+const adaptEnhancedEmotionCurve = (
+  projectId: string,
+  points: EnhancedEmotionPoint[]
+): EmotionCurveResponse => {
+  const emotionDistribution: Record<string, number> = {}
+  let totalIntensity = 0
+
+  const emotionPoints: EmotionPoint[] = points.map((point) => {
+    const emotionLabel = normalizeEnhancedEmotionLabel(point.primary_emotion)
+    const roundedIntensity = Number(point.primary_intensity.toFixed(2))
+    emotionDistribution[emotionLabel] = (emotionDistribution[emotionLabel] || 0) + 1
+    totalIntensity += roundedIntensity
+
+    return {
+      chapter_number: point.chapter_number,
+      title: point.title,
+      emotion_type: emotionLabel,
+      intensity: roundedIntensity,
+      narrative_phase: point.narrative_phase,
+      description: point.description,
+    }
+  })
+
+  return {
+    project_id: projectId,
+    project_title: '',
+    total_chapters: emotionPoints.length,
+    emotion_points: emotionPoints,
+    average_intensity: emotionPoints.length ? totalIntensity / emotionPoints.length : 0,
+    emotion_distribution: emotionDistribution,
+  }
+}
+
 export interface TimelineEventItem {
   id?: number
   project_id?: string
@@ -822,6 +846,35 @@ export class NovelAPI {
     return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/quality-dashboard`)
   }
 
+  static async getComprehensiveAnalysis(projectId: string): Promise<ComprehensiveAnalysisResponse> {
+    return request(`${API_BASE_URL}${API_PREFIX}/analytics/enhanced/projects/${projectId}/comprehensive-analysis`)
+  }
+
+  static async invalidateAnalysisCache(projectId: string): Promise<{ message: string; project_id: string }> {
+    return request(`${API_BASE_URL}${API_PREFIX}/analytics/enhanced/projects/${projectId}/invalidate-cache`, {
+      method: 'POST',
+    })
+  }
+
+  static async getEmotionCurve(
+    projectId: string,
+    mode: 'basic' | 'ai' | 'enhanced' = 'basic'
+  ): Promise<EmotionCurveResponse> {
+    if (mode === 'enhanced') {
+      const points = await request<EnhancedEmotionPoint[]>(
+        `${API_BASE_URL}${API_PREFIX}/analytics/enhanced/projects/${projectId}/emotion-curve-enhanced`
+      )
+      return adaptEnhancedEmotionCurve(projectId, points)
+    }
+
+    const endpoint = mode === 'ai'
+      ? `${API_BASE_URL}${API_PREFIX}/analytics/${projectId}/analyze-emotion-ai`
+      : `${API_BASE_URL}${API_PREFIX}/analytics/${projectId}/emotion-curve`
+    return request(endpoint, {
+      method: mode === 'ai' ? 'POST' : 'GET'
+    })
+  }
+
   static async getPublishSummary(projectId: string): Promise<PublishSummaryResponse> {
     return request(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/publish/summary`)
   }
@@ -847,40 +900,20 @@ export class NovelAPI {
     if (query.toc_style) params.set('toc_style', query.toc_style)
     if (query.webhook_url) params.set('webhook_url', query.webhook_url)
 
+    const fallbackName = `novel_export_${Date.now()}.${query.format === 'markdown' ? 'md' : query.format}`
     const authStore = useAuthStore()
-    const headers = new Headers()
-    if (authStore.isAuthenticated && authStore.token) {
-      headers.set('Authorization', `Bearer ${authStore.token}`)
-    }
-
-    const response = await fetch(
+    await downloadFile(
       `${API_BASE_URL}${API_PREFIX}/projects/${projectId}/publish/export?${params.toString()}`,
       {
         method: 'GET',
-        headers
+        token: authStore.token,
+        onUnauthorized: async () => {
+          authStore.logout()
+          await router.push('/login')
+        },
+        fallbackName,
       }
     )
-    if (response.status === 401) {
-      authStore.logout()
-      router.push('/login')
-      throw new Error('会话已过期，请重新登录')
-    }
-    if (!response.ok) {
-      const detail = await extractErrorMessage(response)
-      throw new Error(normalizeErrorMessage(response.status, detail))
-    }
-
-    const blob = await response.blob()
-    const fallbackName = `novel_export_${Date.now()}.${query.format === 'markdown' ? 'md' : query.format}`
-    const filename = parseDownloadFilename(response.headers.get('content-disposition'), fallbackName)
-    const href = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = href
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(href)
   }
 
   static async downloadPublishBatchExport(
@@ -904,35 +937,20 @@ export class NovelAPI {
     if (query.toc_style) params.set('toc_style', query.toc_style)
     if (query.webhook_url) params.set('webhook_url', query.webhook_url)
 
-    const authStore = useAuthStore()
-    const headers = new Headers()
-    if (authStore.isAuthenticated && authStore.token) {
-      headers.set('Authorization', `Bearer ${authStore.token}`)
-    }
-    const response = await fetch(
-      `${API_BASE_URL}${API_PREFIX}/projects/${projectId}/publish/export-batch?${params.toString()}`,
-      { method: 'GET', headers }
-    )
-    if (response.status === 401) {
-      authStore.logout()
-      router.push('/login')
-      throw new Error('会话已过期，请重新登录')
-    }
-    if (!response.ok) {
-      const detail = await extractErrorMessage(response)
-      throw new Error(normalizeErrorMessage(response.status, detail))
-    }
-    const blob = await response.blob()
     const fallbackName = `novel_export_bundle_${Date.now()}.zip`
-    const filename = parseDownloadFilename(response.headers.get('content-disposition'), fallbackName)
-    const href = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = href
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(href)
+    const authStore = useAuthStore()
+    await downloadFile(
+      `${API_BASE_URL}${API_PREFIX}/projects/${projectId}/publish/export-batch?${params.toString()}`,
+      {
+        method: 'GET',
+        token: authStore.token,
+        onUnauthorized: async () => {
+          authStore.logout()
+          await router.push('/login')
+        },
+        fallbackName,
+      }
+    )
   }
 
   static async listProjectMaterials(
@@ -987,34 +1005,15 @@ export class NovelAPI {
 
   static async downloadProjectBackup(projectId: string): Promise<void> {
     const authStore = useAuthStore()
-    const headers = new Headers()
-    if (authStore.isAuthenticated && authStore.token) {
-      headers.set('Authorization', `Bearer ${authStore.token}`)
-    }
-    const response = await fetch(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/backup/export`, {
+    await downloadFile(`${API_BASE_URL}${API_PREFIX}/projects/${projectId}/backup/export`, {
       method: 'GET',
-      headers
+      token: authStore.token,
+      onUnauthorized: async () => {
+        authStore.logout()
+        await router.push('/login')
+      },
+      fallbackName: `project_backup_${Date.now()}.json`,
     })
-    if (response.status === 401) {
-      authStore.logout()
-      router.push('/login')
-      throw new Error('会话已过期，请重新登录')
-    }
-    if (!response.ok) {
-      const detail = await extractErrorMessage(response)
-      throw new Error(normalizeErrorMessage(response.status, detail))
-    }
-    const blob = await response.blob()
-    const fallbackName = `project_backup_${Date.now()}.json`
-    const filename = parseDownloadFilename(response.headers.get('content-disposition'), fallbackName)
-    const href = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = href
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(href)
   }
 
   static async importProjectBackup(payload: ProjectBackupImportPayload): Promise<ProjectBackupImportResponse> {

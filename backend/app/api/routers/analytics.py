@@ -2,21 +2,18 @@
 """
 情感曲线和伏笔追踪分析API
 """
-import json
 import logging
 import re
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import get_current_user
 from ...db.session import get_session
-from ...models.novel import Chapter, ChapterOutline, ChapterVersion, NovelProject
 from ...schemas.user import UserInDB
+from ...services.analytics_data_service import get_project_or_404, list_project_chapter_snapshots
 from ...services.llm_service import LLMService
-from ...services.prompt_service import PromptService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
@@ -249,57 +246,23 @@ async def get_emotion_curve(
     current_user: UserInDB = Depends(get_current_user),
 ) -> EmotionCurveResponse:
     """获取小说的情感曲线数据"""
-    
-    # 获取项目
-    result = await session.execute(
-        select(NovelProject).where(
-            NovelProject.id == project_id,
-            NovelProject.user_id == current_user.id
-        )
-    )
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
-    
-    # 获取所有章节和大纲
-    chapters_result = await session.execute(
-        select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_number)
-    )
-    chapters = chapters_result.scalars().all()
-    
-    outlines_result = await session.execute(
-        select(ChapterOutline).where(ChapterOutline.project_id == project_id).order_by(ChapterOutline.chapter_number)
-    )
-    outlines = {o.chapter_number: o for o in outlines_result.scalars().all()}
+    project = await get_project_or_404(session, project_id, current_user.id, detail="项目不存在")
+    chapter_snapshots = await list_project_chapter_snapshots(session, project_id)
     
     # 分析每个章节的情感
     emotion_points = []
     emotion_counts = {}
     total_intensity = 0
     
-    for chapter in chapters:
-        # 获取章节内容
-        content = ""
-        if chapter.selected_version_id:
-            version_result = await session.execute(
-                select(ChapterVersion).where(ChapterVersion.id == chapter.selected_version_id)
-            )
-            version = version_result.scalar_one_or_none()
-            if version:
-                content = version.content
-        
-        outline = outlines.get(chapter.chapter_number)
-        title = outline.title if outline else f"第{chapter.chapter_number}章"
-        summary = outline.summary if outline else ""
-        
+    for chapter in chapter_snapshots:
         # 分析情感
-        emotion, intensity = analyze_emotion(content + " " + summary)
-        narrative_phase = detect_narrative_phase(content, summary)
-        description = generate_emotion_description(emotion, intensity, title)
+        emotion, intensity = analyze_emotion(chapter.content + " " + chapter.summary)
+        narrative_phase = detect_narrative_phase(chapter.content, chapter.summary)
+        description = generate_emotion_description(emotion, intensity, chapter.title)
         
         emotion_points.append(EmotionPoint(
             chapter_number=chapter.chapter_number,
-            title=title,
+            title=chapter.title,
             emotion_type=emotion,
             intensity=intensity,
             narrative_phase=narrative_phase,
@@ -310,12 +273,12 @@ async def get_emotion_curve(
         total_intensity += intensity
     
     # 计算统计数据
-    avg_intensity = total_intensity / len(chapters) if chapters else 0
+    avg_intensity = total_intensity / len(chapter_snapshots) if chapter_snapshots else 0
     
     return EmotionCurveResponse(
         project_id=project_id,
         project_title=project.title,
-        total_chapters=len(chapters),
+        total_chapters=len(chapter_snapshots),
         emotion_points=emotion_points,
         average_intensity=round(avg_intensity, 2),
         emotion_distribution=emotion_counts,
@@ -329,49 +292,17 @@ async def get_foreshadowing(
     current_user: UserInDB = Depends(get_current_user),
 ) -> ForeshadowingResponse:
     """获取小说的伏笔追踪数据"""
-    
-    # 获取项目
-    result = await session.execute(
-        select(NovelProject).where(
-            NovelProject.id == project_id,
-            NovelProject.user_id == current_user.id
-        )
-    )
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
-    
-    # 获取所有章节和大纲
-    chapters_result = await session.execute(
-        select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_number)
-    )
-    chapters = chapters_result.scalars().all()
-    
-    outlines_result = await session.execute(
-        select(ChapterOutline).where(ChapterOutline.project_id == project_id).order_by(ChapterOutline.chapter_number)
-    )
-    outlines = {o.chapter_number: o for o in outlines_result.scalars().all()}
-    
-    # 构建章节数据
-    chapters_data = []
-    for chapter in chapters:
-        content = ""
-        if chapter.selected_version_id:
-            version_result = await session.execute(
-                select(ChapterVersion).where(ChapterVersion.id == chapter.selected_version_id)
-            )
-            version = version_result.scalar_one_or_none()
-            if version:
-                content = version.content
-        
-        outline = outlines.get(chapter.chapter_number)
-        
-        chapters_data.append({
+    project = await get_project_or_404(session, project_id, current_user.id, detail="项目不存在")
+    chapter_snapshots = await list_project_chapter_snapshots(session, project_id)
+    chapters_data = [
+        {
             "chapter_number": chapter.chapter_number,
-            "title": outline.title if outline else f"第{chapter.chapter_number}章",
-            "summary": outline.summary if outline else "",
-            "content": content,
-        })
+            "title": chapter.title,
+            "summary": chapter.summary,
+            "content": chapter.content,
+        }
+        for chapter in chapter_snapshots
+    ]
     
     # 提取伏笔
     foreshadowings = extract_foreshadowings(chapters_data)
@@ -399,35 +330,15 @@ async def analyze_emotion_with_ai(
     current_user: UserInDB = Depends(get_current_user),
 ) -> EmotionCurveResponse:
     """使用AI深度分析情感曲线（更准确但较慢）"""
-    
-    # 获取项目
-    result = await session.execute(
-        select(NovelProject).where(
-            NovelProject.id == project_id,
-            NovelProject.user_id == current_user.id
-        )
-    )
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
-    
-    # 获取所有章节
-    chapters_result = await session.execute(
-        select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_number)
-    )
-    chapters = chapters_result.scalars().all()
-    
-    outlines_result = await session.execute(
-        select(ChapterOutline).where(ChapterOutline.project_id == project_id).order_by(ChapterOutline.chapter_number)
-    )
-    outlines = {o.chapter_number: o for o in outlines_result.scalars().all()}
+    project = await get_project_or_404(session, project_id, current_user.id, detail="项目不存在")
+    chapter_snapshots = await list_project_chapter_snapshots(session, project_id)
     
     # 构建章节摘要列表
     chapter_summaries = []
-    for chapter in chapters:
-        outline = outlines.get(chapter.chapter_number)
-        if outline:
-            chapter_summaries.append(f"第{chapter.chapter_number}章《{outline.title}》：{outline.summary}")
+    chapter_titles = {chapter.chapter_number: chapter.title for chapter in chapter_snapshots}
+    for chapter in chapter_snapshots:
+        if chapter.summary:
+            chapter_summaries.append(f"第{chapter.chapter_number}章《{chapter.title}》：{chapter.summary}")
     
     if not chapter_summaries:
         raise HTTPException(status_code=400, detail="没有可分析的章节")
@@ -473,8 +384,7 @@ async def analyze_emotion_with_ai(
         total_intensity = 0
         
         for item in data.get("chapters", []):
-            outline = outlines.get(item["chapter_number"])
-            title = outline.title if outline else f"第{item['chapter_number']}章"
+            title = chapter_titles.get(item["chapter_number"], f"第{item['chapter_number']}章")
             
             emotion_points.append(EmotionPoint(
                 chapter_number=item["chapter_number"],

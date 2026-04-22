@@ -1,6 +1,7 @@
 // AIMETA P=认证状态_用户登录状态管理|R=token_user_login_logout|NR=不含API调用|E=store:auth|X=internal|A=useAuthStore|D=pinia|S=storage|RD=./README.ai
 import { defineStore } from 'pinia';
 import { API_BASE_URL } from '@/api/config';
+import { httpRequest } from '@/api/http';
 
 const API_URL = `${API_BASE_URL}/api/auth`;
 
@@ -9,27 +10,6 @@ interface AuthOptions {
   allow_registration: boolean;
   // 是否启用 Linux.do 登录
   enable_linuxdo_login: boolean;
-}
-
-// Helper function to handle fetch requests and token refreshing
-async function fetchWithAuth(url: string, options: RequestInit = {}) {
-  const authStore = useAuthStore();
-  const headers = new Headers(options.headers || {});
-  
-  if (authStore.token) {
-    headers.set('Authorization', `Bearer ${authStore.token}`);
-  }
-
-  options.headers = headers;
-  const response = await fetch(url, options);
-
-  const refreshedToken = response.headers.get('X-Token-Refresh');
-  if (refreshedToken) {
-    authStore.token = refreshedToken;
-    localStorage.setItem('token', refreshedToken);
-  }
-
-  return response;
 }
 
 interface User {
@@ -59,11 +39,7 @@ export const useAuthStore = defineStore('auth', {
         return;
       }
       try {
-        const response = await fetch(`${API_URL}/options`);
-        if (!response.ok) {
-          throw new Error('读取认证开关失败');
-        }
-        const data = await response.json() as AuthOptions;
+        const data = await httpRequest<AuthOptions>(`${API_URL}/options`);
         this.authOptions = data;
       } catch (error) {
         console.error('获取认证配置失败，将使用默认值', error);
@@ -80,16 +56,10 @@ export const useAuthStore = defineStore('auth', {
       params.append('username', username);
       params.append('password', password);
 
-      const response = await fetchWithAuth(`${API_URL}/token`, {
+      const data = await httpRequest<{ access_token: string; must_change_password?: boolean }>(`${API_URL}/token`, {
         method: 'POST',
         body: params,
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to login');
-      }
-
-      const data = await response.json();
       this.token = data.access_token;
       if (this.token) {
         localStorage.setItem('token', this.token);
@@ -103,40 +73,22 @@ export const useAuthStore = defineStore('auth', {
     },
     // 当前注册流程在 Register.vue 中实现，此处预留方法以兼容旧逻辑
     async register(payload: { username: string; email: string; password: string; verification_code: string }) {
-      const response = await fetch(`${API_URL}/users`, {
+      await httpRequest(`${API_URL}/users`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      });
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const detail = errorData.detail || 'Failed to register';
-        throw new Error(detail);
-      }
+      })
     },
     async forgotPassword(email: string) {
-      const response = await fetch(`${API_URL}/password/forgot`, {
+      await httpRequest(`${API_URL}/password/forgot`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
-      });
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const detail = errorData.detail || '发送验证码失败';
-        throw new Error(detail);
-      }
+      })
     },
     async resetPassword(payload: { email: string; verification_code: string; new_password: string }) {
-      const response = await fetch(`${API_URL}/password/reset`, {
+      await httpRequest(`${API_URL}/password/reset`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      });
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const detail = errorData.detail || '重置密码失败';
-        throw new Error(detail);
-      }
+      })
     },
     logout() {
       this.token = null;
@@ -146,13 +98,9 @@ export const useAuthStore = defineStore('auth', {
     async fetchUser() {
       if (this.token) {
         try {
-          const response = await fetchWithAuth(`${API_URL}/users/me`);
-
-          if (!response.ok) {
-            throw new Error('Failed to fetch user');
-          }
-
-          const userData = await response.json();
+          const userData = await httpRequest<User>(`${API_URL}/users/me`, {
+            token: this.token,
+          })
           this.user = {
             id: userData.id,
             username: userData.username,

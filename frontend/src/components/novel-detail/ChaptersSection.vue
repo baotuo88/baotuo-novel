@@ -403,6 +403,7 @@
 </template>
 
 <script setup lang="ts">
+import { saveBlobAsFile } from '@/api/http'
 import { computed, defineProps, ref, watch } from 'vue'
 import { NovelAPI } from '@/api/novel'
 import { AdminAPI } from '@/api/admin'
@@ -518,14 +519,7 @@ const exportChapterAsTxt = () => {
   const safeTitle = sanitizeFileName(title) || `chapter-${chapter.chapter_number}`
   const content = chapter.content ?? ''
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${safeTitle}.txt`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
+  saveBlobAsFile(blob, `${safeTitle}.txt`)
 }
 
 // 打开版本弹窗

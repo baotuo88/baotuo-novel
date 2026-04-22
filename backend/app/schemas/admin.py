@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Statistics(BaseModel):
@@ -22,8 +22,7 @@ class UpdateLogRead(BaseModel):
     created_by: Optional[str] = None
     is_pinned: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UpdateLogBase(BaseModel):
@@ -69,8 +68,7 @@ class LLMCallLogRead(BaseModel):
     error_message: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LLMCallSummary(BaseModel):

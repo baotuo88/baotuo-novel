@@ -4,3 +4,4 @@ import os
 
 # 允许在本地/CI 直接运行测试，不依赖外部注入 SECRET_KEY。
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ.setdefault("ADMIN_DEFAULT_PASSWORD", "TestAdminPassword123!")

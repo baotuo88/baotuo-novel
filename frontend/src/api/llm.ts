@@ -1,5 +1,7 @@
 // AIMETA P=LLM_API客户端_模型配置接口|R=LLM配置CRUD|NR=不含UI逻辑|E=api:llm|X=internal|A=llmApi对象|D=axios|S=net|RD=./README.ai
+import router from '@/router'
 import { useAuthStore } from '@/stores/auth';
+import { httpRequest, downloadFile } from './http'
 
 const API_PREFIX = '/api';
 const LLM_BASE = `${API_PREFIX}/llm-config`;
@@ -17,48 +19,38 @@ export interface LLMConfigCreate {
   llm_provider_model?: string;
 }
 
-const getHeaders = () => {
-  const authStore = useAuthStore();
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${authStore.token}`,
-  };
-};
+const clientRequest = <T>(url: string, options: RequestInit = {}) => {
+  const authStore = useAuthStore()
+  return httpRequest<T>(url, {
+    ...options,
+    token: authStore.token,
+    onUnauthorized: async () => {
+      authStore.logout()
+      await router.push('/login')
+    }
+  })
+}
 
 export const getLLMConfig = async (): Promise<LLMConfig | null> => {
-  const response = await fetch(LLM_BASE, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-  if (response.status === 404) {
-    return null;
+  try {
+    return await clientRequest<LLMConfig>(LLM_BASE, { method: 'GET' })
+  } catch (error) {
+    if ((error as Error).message.includes('状态码: 404')) {
+      return null
+    }
+    throw error
   }
-  if (!response.ok) {
-    throw new Error('Failed to fetch LLM config');
-  }
-  return response.json();
 };
 
 export const createOrUpdateLLMConfig = async (config: LLMConfigCreate): Promise<LLMConfig> => {
-  const response = await fetch(LLM_BASE, {
+  return clientRequest<LLMConfig>(LLM_BASE, {
     method: 'PUT',
-    headers: getHeaders(),
     body: JSON.stringify(config),
-  });
-  if (!response.ok) {
-    throw new Error('Failed to save LLM config');
-  }
-  return response.json();
+  })
 };
 
 export const deleteLLMConfig = async (): Promise<void> => {
-  const response = await fetch(LLM_BASE, {
-    method: 'DELETE',
-    headers: getHeaders(),
-  });
-  if (!response.ok) {
-    throw new Error('Failed to delete LLM config');
-  }
+  await clientRequest<void>(LLM_BASE, { method: 'DELETE' })
 };
 
 export interface ModelListRequest {
@@ -67,16 +59,15 @@ export interface ModelListRequest {
 }
 
 export const getAvailableModels = async (request: ModelListRequest): Promise<string[]> => {
-  const response = await fetch(`${LLM_BASE}/models`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(request),
-  });
-  if (!response.ok) {
+  try {
+    return await clientRequest<string[]>(`${LLM_BASE}/models`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  } catch {
     // 获取模型列表失败时返回空数组，不影响主流程
     return [];
   }
-  return response.json();
 };
 
 export interface LLMConnectionTestRequest {
@@ -143,25 +134,11 @@ export interface UserSubscriptionBillingSummary {
 }
 
 export const getMySubscriptionStatus = async (): Promise<UserSubscriptionStatus> => {
-  const response = await fetch('/api/auth/subscription', {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-  if (!response.ok) {
-    throw new Error('获取订阅状态失败');
-  }
-  return response.json();
+  return clientRequest<UserSubscriptionStatus>('/api/auth/subscription', { method: 'GET' })
 };
 
 export const getMySubscriptionUsageSummary = async (): Promise<UserSubscriptionUsageSummary> => {
-  const response = await fetch('/api/auth/subscription/usage-summary', {
-    method: 'GET',
-    headers: getHeaders(),
-  });
-  if (!response.ok) {
-    throw new Error('获取订阅额度摘要失败');
-  }
-  return response.json();
+  return clientRequest<UserSubscriptionUsageSummary>('/api/auth/subscription/usage-summary', { method: 'GET' })
 };
 
 export const getMySubscriptionBilling = async (params: {
@@ -172,52 +149,36 @@ export const getMySubscriptionBilling = async (params: {
   if (params.hours != null) query.set('hours', String(params.hours));
   if (params.limit != null) query.set('limit', String(params.limit));
   const qs = query.toString();
-  const response = await fetch(`/api/auth/subscription/billing${qs ? `?${qs}` : ''}`, {
+  return clientRequest<UserSubscriptionBillingSummary>(`/api/auth/subscription/billing${qs ? `?${qs}` : ''}`, {
     method: 'GET',
-    headers: getHeaders(),
-  });
-  if (!response.ok) {
-    throw new Error('获取订阅账单明细失败');
-  }
-  return response.json();
+  })
 };
 
 export const downloadMySubscriptionBillingCsv = async (params: {
   hours?: number;
   limit?: number;
 } = {}): Promise<void> => {
+  const authStore = useAuthStore()
   const query = new URLSearchParams();
   if (params.hours != null) query.set('hours', String(params.hours));
   if (params.limit != null) query.set('limit', String(params.limit));
   const qs = query.toString();
-  const response = await fetch(`/api/auth/subscription/billing/export.csv${qs ? `?${qs}` : ''}`, {
+  await downloadFile(`/api/auth/subscription/billing/export.csv${qs ? `?${qs}` : ''}`, {
     method: 'GET',
-    headers: getHeaders(),
-  });
-  if (!response.ok) {
-    throw new Error('导出订阅账单失败');
-  }
-  const blob = await response.blob();
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `subscription_billing_${Date.now()}.csv`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  window.URL.revokeObjectURL(url);
+    token: authStore.token,
+    onUnauthorized: async () => {
+      authStore.logout()
+      await router.push('/login')
+    },
+    fallbackName: `subscription_billing_${Date.now()}.csv`,
+  })
 };
 
 export const testLLMConnection = async (
-  request: LLMConnectionTestRequest
+  payload: LLMConnectionTestRequest
 ): Promise<LLMConnectionTestResult> => {
-  const response = await fetch(`${LLM_BASE}/test-connection`, {
+  return clientRequest<LLMConnectionTestResult>(`${LLM_BASE}/test-connection`, {
     method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(request),
-  });
-  if (!response.ok) {
-    throw new Error('LLM 连接测试失败');
-  }
-  return response.json();
+    body: JSON.stringify(payload),
+  })
 };

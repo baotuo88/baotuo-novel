@@ -4,8 +4,7 @@ sqlalchemy==2.0.44
 asyncmy==0.2.9
 aiosqlite==0.21.0
 alembic==1.13.1
-passlib[bcrypt]==1.7.4
-bcrypt>=3.2.0,<4.0.0
+bcrypt>=4.0.1
 python-jose==3.3.0
 python-dotenv==1.0.1
 pydantic==2.12.2

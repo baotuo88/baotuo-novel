@@ -400,6 +400,7 @@
 </template>
 
 <script setup lang="ts">
+import { saveBlobAsFile } from '@/api/http'
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import Chart from 'chart.js/auto'
 import type { Chart as ChartInstance, ChartDataset } from 'chart.js'
@@ -1384,14 +1385,7 @@ const exportCsv = async () => {
       project_id: filters.project_id || undefined,
       max_rows: 20000
     })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = buildExportFilename()
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
+    saveBlobAsFile(blob, buildExportFilename())
     showAlert('CSV 导出成功', 'success')
   } catch (err) {
     showAlert(err instanceof Error ? err.message : 'CSV 导出失败', 'error')

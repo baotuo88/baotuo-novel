@@ -132,6 +132,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
+import { httpRequest } from '@/api/http';
 
 const username = ref('');
 const email = ref('');
@@ -206,13 +207,9 @@ const sendCode = async () => {
 
   sending.value = true;
   try {
-    const res = await fetch(`/api/auth/send-code?email=${encodeURIComponent(email.value)}`, {
+    await httpRequest(`/api/auth/send-code?email=${encodeURIComponent(email.value)}`, {
       method: 'POST'
-    });
-    if (!res.ok) {
-      const errMsg = await res.json();
-      throw new Error(errMsg.detail || '发送验证码失败');
-    }
+    })
     success.value = '验证码已发送，请查收邮箱';
     // 等接口返回成功后再开始倒计时
     countdown.value = 60;
@@ -243,20 +240,15 @@ const handleRegister = async () => {
   }
 
   try {
-    const res = await fetch('/api/auth/users', {
+    await httpRequest('/api/auth/users', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: username.value,
         email: email.value,
         password: password.value,
         verification_code: verificationCode.value
       })
-    });
-    if (!res.ok) {
-      const errMsg = await res.json();
-      throw new Error(errMsg.detail || '注册失败');
-    }
+    })
     success.value = '注册成功！正在跳转到登录页面...';
     setTimeout(() => {
       router.push('/login');

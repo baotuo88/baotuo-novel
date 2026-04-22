@@ -31,4 +31,9 @@ async def get_current_user(
 async def get_current_admin(current_user: UserInDB = Depends(get_current_user)) -> UserInDB:
     if not current_user.is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
+    if current_user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="当前管理员仍在使用初始密码，请先修改密码后再访问管理功能",
+        )
     return current_user

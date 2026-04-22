@@ -345,6 +345,7 @@
 </template>
 
 <script setup lang="ts">
+import { saveBlobAsFile } from '@/api/http'
 import { computed, ref, watch } from 'vue'
 import { globalAlert } from '@/composables/useAlert'
 import type { Chapter, ChapterConsistencyReview, ConsistencyActionSuggestion } from '@/api/novel'
@@ -474,14 +475,7 @@ const exportChapterAsTxt = (chapter?: Chapter | null) => {
   const safeTitle = sanitizeFileName(title) || `chapter-${chapter.chapter_number}`
   const content = cleanVersionContent(chapter.content || '')
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${safeTitle}.txt`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
+  saveBlobAsFile(blob, `${safeTitle}.txt`)
 }
 
 const runConsistencyCheck = async () => {

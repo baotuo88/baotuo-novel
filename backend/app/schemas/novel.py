@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChoiceOption(BaseModel):
@@ -83,8 +83,7 @@ class Blueprint(BaseModel):
     relationships: List[Relationship] = []
     chapter_outline: List[ChapterOutline] = []
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class NovelProject(BaseModel):
@@ -96,8 +95,7 @@ class NovelProject(BaseModel):
     blueprint: Optional[Blueprint] = None
     chapters: List[Chapter] = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class NovelProjectSummary(BaseModel):

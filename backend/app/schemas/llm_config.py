@@ -1,7 +1,7 @@
 # AIMETA P=LLM配置模式_模型配置请求响应|R=LLM配置结构|NR=不含业务逻辑|E=LLMConfigSchema|X=internal|A=Pydantic模式|D=pydantic|S=none|RD=./README.ai
 from typing import Optional
 
-from pydantic import BaseModel, HttpUrl, Field
+from pydantic import BaseModel, ConfigDict, HttpUrl, Field
 
 
 class LLMConfigBase(BaseModel):
@@ -16,9 +16,7 @@ class LLMConfigCreate(LLMConfigBase):
 
 class LLMConfigRead(LLMConfigBase):
     user_id: int
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ModelListRequest(BaseModel):

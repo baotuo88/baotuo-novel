@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class UserBase(BaseModel):
@@ -48,8 +48,7 @@ class User(UserBase):
     is_active: bool = Field(default=True, description="是否激活")
     must_change_password: bool = Field(default=False, description="是否需要强制修改密码")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserInDB(User):
@@ -132,8 +131,7 @@ class UserSubscriptionAuditRead(BaseModel):
     new_snapshot: str = Field(..., description="变更后快照(JSON)")
     created_at: datetime = Field(..., description="创建时间")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserSubscriptionUsageSummaryRead(BaseModel):

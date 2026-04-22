@@ -3,44 +3,26 @@ import { useAuthStore } from '@/stores/auth'
 import router from '@/router'
 import type { NovelSectionResponse, NovelSectionType } from '@/api/novel'
 import { API_BASE_URL, ADMIN_API_PREFIX } from './config'
+import { httpFetchResponse, httpRequest } from './http'
 
 // 对外保持兼容导出，避免其它模块引用路径变更
 export { API_BASE_URL, ADMIN_API_PREFIX } from './config'
 
 // 统一请求封装
-const request = async (url: string, options: RequestInit = {}) => {
+const request = async <T = unknown>(url: string, options: RequestInit = {}): Promise<T> => {
   const authStore = useAuthStore()
-  const headers = new Headers({
-    'Content-Type': 'application/json',
-    ...options.headers
+  return httpRequest<T>(url, {
+    ...options,
+    token: authStore.isAuthenticated ? authStore.token : null,
+    onUnauthorized: async () => {
+      authStore.logout()
+      await router.push('/login')
+    }
   })
-
-  if (authStore.isAuthenticated && authStore.token) {
-    headers.set('Authorization', `Bearer ${authStore.token}`)
-  }
-
-  const response = await fetch(url, { ...options, headers })
-
-  if (response.status === 401) {
-    authStore.logout()
-    router.push('/login')
-    throw new Error('会话已过期，请重新登录')
-  }
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.detail || `请求失败，状态码: ${response.status}`)
-  }
-
-  if (response.status === 204) {
-    return
-  }
-
-  return response.json()
 }
 
-const adminRequest = (path: string, options: RequestInit = {}) =>
-  request(`${API_BASE_URL}${ADMIN_API_PREFIX}${path}`, options)
+const adminRequest = <T = unknown>(path: string, options: RequestInit = {}) =>
+  request<T>(`${API_BASE_URL}${ADMIN_API_PREFIX}${path}`, options)
 
 // 类型定义
 export interface Statistics {
@@ -492,13 +474,13 @@ export interface SystemConfigUpsertPayload {
 export type SystemConfigUpdatePayload = Partial<SystemConfigUpsertPayload>
 
 export class AdminAPI {
-  private static request(path: string, options: RequestInit = {}) {
-    return adminRequest(path, options)
+  private static request<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
+    return adminRequest<T>(path, options)
   }
 
   // Overview
   static getStatistics(): Promise<Statistics> {
-    return this.request('/stats')
+    return this.request<Statistics>('/stats')
   }
 
   static getLLMCallSummary(
@@ -516,7 +498,7 @@ export class AdminAPI {
     if (model) params.set('model', model)
     if (userId != null) params.set('user_id', String(userId))
     if (projectId) params.set('project_id', projectId)
-    return this.request(`/llm-call-logs/summary?${params.toString()}`)
+    return this.request<LLMCallSummary>(`/llm-call-logs/summary?${params.toString()}`)
   }
 
   static listLLMCallLogs(query: LLMCallLogQuery = {}): Promise<LLMCallLog[]> {
@@ -530,7 +512,7 @@ export class AdminAPI {
     if (query.user_id != null) params.set('user_id', String(query.user_id))
     if (query.project_id) params.set('project_id', query.project_id)
     const queryString = params.toString()
-    return this.request(`/llm-call-logs${queryString ? `?${queryString}` : ''}`)
+    return this.request<LLMCallLog[]>(`/llm-call-logs${queryString ? `?${queryString}` : ''}`)
   }
 
   static getLLMHourlyGroupedTrend(query: LLMTrendQuery = {}): Promise<LLMGroupedTrendResponse> {
@@ -543,7 +525,7 @@ export class AdminAPI {
     if (query.model) params.set('model', query.model)
     if (query.user_id != null) params.set('user_id', String(query.user_id))
     if (query.project_id) params.set('project_id', query.project_id)
-    return this.request(`/llm-call-logs/hourly-grouped?${params.toString()}`)
+    return this.request<LLMGroupedTrendResponse>(`/llm-call-logs/hourly-grouped?${params.toString()}`)
   }
 
   static getLLMErrorTop(query: LLMErrorTopQuery = {}): Promise<LLMErrorTopItem[]> {
@@ -554,7 +536,7 @@ export class AdminAPI {
     if (query.model) params.set('model', query.model)
     if (query.user_id != null) params.set('user_id', String(query.user_id))
     if (query.project_id) params.set('project_id', query.project_id)
-    return this.request(`/llm-call-logs/errors-top?${params.toString()}`)
+    return this.request<LLMErrorTopItem[]>(`/llm-call-logs/errors-top?${params.toString()}`)
   }
 
   static getLLMBudgetAlerts(query: LLMBudgetAlertQuery = {}): Promise<LLMBudgetAlertResponse> {
@@ -562,7 +544,7 @@ export class AdminAPI {
     if (query.limit_each != null) params.set('limit_each', String(query.limit_each))
     if (query.only_alerting != null) params.set('only_alerting', String(query.only_alerting))
     const queryString = params.toString()
-    return this.request(`/llm-budget-alerts${queryString ? `?${queryString}` : ''}`)
+    return this.request<LLMBudgetAlertResponse>(`/llm-budget-alerts${queryString ? `?${queryString}` : ''}`)
   }
 
   static getConfigHealth(query: ConfigHealthQuery = {}): Promise<ConfigHealthResponse> {
@@ -570,14 +552,14 @@ export class AdminAPI {
     if (query.run_connectivity != null) params.set('run_connectivity', String(query.run_connectivity))
     if (query.webhook_url) params.set('webhook_url', query.webhook_url)
     const queryString = params.toString()
-    return this.request(`/config-health${queryString ? `?${queryString}` : ''}`)
+    return this.request<ConfigHealthResponse>(`/config-health${queryString ? `?${queryString}` : ''}`)
   }
 
   static getWriterTaskAlerts(query: WriterTaskAlertQuery = {}): Promise<WriterTaskAlertResponse> {
     const params = new URLSearchParams()
     if (query.window_hours != null) params.set('window_hours', String(query.window_hours))
     const queryString = params.toString()
-    return this.request(`/writer-task-alerts${queryString ? `?${queryString}` : ''}`)
+    return this.request<WriterTaskAlertResponse>(`/writer-task-alerts${queryString ? `?${queryString}` : ''}`)
   }
 
   static getWriterTaskQueue(query: WriterTaskQueueQuery = {}): Promise<WriterTaskQueueResponse> {
@@ -587,11 +569,11 @@ export class AdminAPI {
     if (query.project_id) params.set('project_id', query.project_id)
     if (query.user_id != null) params.set('user_id', String(query.user_id))
     const queryString = params.toString()
-    return this.request(`/writer-task-queue${queryString ? `?${queryString}` : ''}`)
+    return this.request<WriterTaskQueueResponse>(`/writer-task-queue${queryString ? `?${queryString}` : ''}`)
   }
 
   static retryWriterTask(payload: WriterTaskRetryPayload): Promise<WriterTaskRetryResponse> {
-    return this.request('/writer-task-queue/retry', {
+    return this.request<WriterTaskRetryResponse>('/writer-task-queue/retry', {
       method: 'POST',
       body: JSON.stringify(payload)
     })
@@ -616,56 +598,49 @@ export class AdminAPI {
     if (query.max_rows != null) params.set('max_rows', String(query.max_rows))
 
     const authStore = useAuthStore()
-    const headers = new Headers()
-    if (authStore.isAuthenticated && authStore.token) {
-      headers.set('Authorization', `Bearer ${authStore.token}`)
-    }
-    const response = await fetch(
+    const response = await httpFetchResponse(
       `${API_BASE_URL}${ADMIN_API_PREFIX}/llm-call-logs/export.csv?${params.toString()}`,
-      { method: 'GET', headers }
+      {
+        method: 'GET',
+        token: authStore.isAuthenticated ? authStore.token : null,
+        onUnauthorized: async () => {
+          authStore.logout()
+          await router.push('/login')
+        }
+      }
     )
-
-    if (response.status === 401) {
-      authStore.logout()
-      router.push('/login')
-      throw new Error('会话已过期，请重新登录')
-    }
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(errorData.detail || `导出失败，状态码: ${response.status}`)
-    }
     return response.blob()
   }
 
   // Users
   static listUsers(): Promise<AdminUser[]> {
-    return this.request('/users')
+    return this.request<AdminUser[]>('/users')
   }
 
   static createUser(payload: UserCreatePayload): Promise<AdminUser> {
-    return this.request('/users', {
+    return this.request<AdminUser>('/users', {
       method: 'POST',
       body: JSON.stringify(payload)
     })
   }
 
   static getUser(id: number): Promise<AdminUser> {
-    return this.request(`/users/${id}`)
+    return this.request<AdminUser>(`/users/${id}`)
   }
 
   static updateUser(id: number, payload: UserUpdatePayload): Promise<AdminUser> {
-    return this.request(`/users/${id}`, {
+    return this.request<AdminUser>(`/users/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload)
     })
   }
 
   static getUserSubscription(id: number): Promise<UserSubscriptionRead> {
-    return this.request(`/users/${id}/subscription`)
+    return this.request<UserSubscriptionRead>(`/users/${id}/subscription`)
   }
 
   static upsertUserSubscription(id: number, payload: UserSubscriptionUpsertPayload): Promise<UserSubscriptionRead> {
-    return this.request(`/users/${id}/subscription`, {
+    return this.request<UserSubscriptionRead>(`/users/${id}/subscription`, {
       method: 'PUT',
       body: JSON.stringify(payload)
     })
@@ -676,158 +651,158 @@ export class AdminAPI {
     if (params.user_id != null) query.set('user_id', String(params.user_id))
     if (params.limit != null) query.set('limit', String(params.limit))
     const qs = query.toString()
-    return this.request(`/subscription-audits${qs ? `?${qs}` : ''}`)
+    return this.request<UserSubscriptionAuditItem[]>(`/subscription-audits${qs ? `?${qs}` : ''}`)
   }
 
   static compensateUserSubscription(
     id: number,
     payload: UserSubscriptionCompensationPayload
   ): Promise<UserSubscriptionCompensationResult> {
-    return this.request(`/users/${id}/subscription/compensation`, {
+    return this.request<UserSubscriptionCompensationResult>(`/users/${id}/subscription/compensation`, {
       method: 'POST',
       body: JSON.stringify(payload)
     })
   }
 
   static deleteUser(id: number): Promise<void> {
-    return this.request(`/users/${id}`, {
+    return this.request<void>(`/users/${id}`, {
       method: 'DELETE'
     })
   }
 
   // Novels
   static listNovels(): Promise<AdminNovelSummary[]> {
-    return this.request('/novel-projects')
+    return this.request<AdminNovelSummary[]>('/novel-projects')
   }
 
   static getNovelDetails(projectId: string): Promise<NovelProject> {
-    return this.request(`/novel-projects/${projectId}`)
+    return this.request<NovelProject>(`/novel-projects/${projectId}`)
   }
 
   static getNovelSection(projectId: string, section: NovelSectionType): Promise<NovelSectionResponse> {
-    return this.request(`/novel-projects/${projectId}/sections/${section}`)
+    return this.request<NovelSectionResponse>(`/novel-projects/${projectId}/sections/${section}`)
   }
 
   static getNovelChapter(projectId: string, chapterNumber: number): Promise<Chapter> {
-    return this.request(`/novel-projects/${projectId}/chapters/${chapterNumber}`)
+    return this.request<Chapter>(`/novel-projects/${projectId}/chapters/${chapterNumber}`)
   }
 
   // Prompts
   static listPrompts(): Promise<PromptItem[]> {
-    return this.request('/prompts')
+    return this.request<PromptItem[]>('/prompts')
   }
 
   static createPrompt(payload: PromptCreatePayload): Promise<PromptItem> {
-    return this.request('/prompts', {
+    return this.request<PromptItem>('/prompts', {
       method: 'POST',
       body: JSON.stringify(payload)
     })
   }
 
   static getPrompt(id: number): Promise<PromptItem> {
-    return this.request(`/prompts/${id}`)
+    return this.request<PromptItem>(`/prompts/${id}`)
   }
 
   static updatePrompt(id: number, payload: PromptUpdatePayload): Promise<PromptItem> {
-    return this.request(`/prompts/${id}`, {
+    return this.request<PromptItem>(`/prompts/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload)
     })
   }
 
   static deletePrompt(id: number): Promise<void> {
-    return this.request(`/prompts/${id}`, {
+    return this.request<void>(`/prompts/${id}`, {
       method: 'DELETE'
     })
   }
 
   static listWritingPresets(): Promise<WritingPresetItem[]> {
-    return this.request('/prompts/presets')
+    return this.request<WritingPresetItem[]>('/prompts/presets')
   }
 
   static upsertWritingPreset(payload: WritingPresetUpsertPayload): Promise<WritingPresetItem> {
-    return this.request('/prompts/presets', {
+    return this.request<WritingPresetItem>('/prompts/presets', {
       method: 'POST',
       body: JSON.stringify(payload)
     })
   }
 
   static activateWritingPreset(presetId: string | null): Promise<WritingPresetItem | null> {
-    return this.request('/prompts/presets/active', {
+    return this.request<WritingPresetItem | null>('/prompts/presets/active', {
       method: 'PUT',
       body: JSON.stringify({ preset_id: presetId })
     })
   }
 
   static deleteWritingPreset(presetId: string): Promise<void> {
-    return this.request(`/prompts/presets/${encodeURIComponent(presetId)}`, {
+    return this.request<void>(`/prompts/presets/${encodeURIComponent(presetId)}`, {
       method: 'DELETE'
     })
   }
 
   // Update logs
   static listUpdateLogs(): Promise<UpdateLog[]> {
-    return this.request('/update-logs')
+    return this.request<UpdateLog[]>('/update-logs')
   }
 
   static createUpdateLog(payload: UpdateLogPayload & { content: string }): Promise<UpdateLog> {
-    return this.request('/update-logs', {
+    return this.request<UpdateLog>('/update-logs', {
       method: 'POST',
       body: JSON.stringify(payload)
     })
   }
 
   static updateUpdateLog(id: number, payload: UpdateLogPayload): Promise<UpdateLog> {
-    return this.request(`/update-logs/${id}`, {
+    return this.request<UpdateLog>(`/update-logs/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload)
     })
   }
 
   static deleteUpdateLog(id: number): Promise<void> {
-    return this.request(`/update-logs/${id}`, {
+    return this.request<void>(`/update-logs/${id}`, {
       method: 'DELETE'
     })
   }
 
   // Settings
   static getDailyRequestLimit(): Promise<DailyRequestLimit> {
-    return this.request('/settings/daily-request-limit')
+    return this.request<DailyRequestLimit>('/settings/daily-request-limit')
   }
 
   static setDailyRequestLimit(limit: number): Promise<DailyRequestLimit> {
-    return this.request('/settings/daily-request-limit', {
+    return this.request<DailyRequestLimit>('/settings/daily-request-limit', {
       method: 'PUT',
       body: JSON.stringify({ limit })
     })
   }
 
   static listSystemConfigs(): Promise<SystemConfig[]> {
-    return this.request('/system-configs')
+    return this.request<SystemConfig[]>('/system-configs')
   }
 
   static upsertSystemConfig(key: string, payload: SystemConfigUpsertPayload): Promise<SystemConfig> {
-    return this.request(`/system-configs/${key}`, {
+    return this.request<SystemConfig>(`/system-configs/${key}`, {
       method: 'PUT',
       body: JSON.stringify({ key, ...payload })
     })
   }
 
   static patchSystemConfig(key: string, payload: SystemConfigUpdatePayload): Promise<SystemConfig> {
-    return this.request(`/system-configs/${key}`, {
+    return this.request<SystemConfig>(`/system-configs/${key}`, {
       method: 'PATCH',
       body: JSON.stringify(payload)
     })
   }
 
   static deleteSystemConfig(key: string): Promise<void> {
-    return this.request(`/system-configs/${key}`, {
+    return this.request<void>(`/system-configs/${key}`, {
       method: 'DELETE'
     })
   }
 
   static changePassword(oldPassword: string, newPassword: string): Promise<void> {
-    return this.request('/password', {
+    return this.request<void>('/password', {
       method: 'POST',
       body: JSON.stringify({
         old_password: oldPassword,

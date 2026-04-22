@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.config import settings
-from ...core.dependencies import get_current_admin
+from ...core.dependencies import get_current_admin, get_current_user
 from ...db.session import AsyncSessionLocal, get_session
 from ...models import (
     Chapter,
@@ -1078,7 +1078,7 @@ async def get_config_health(
         )
 
     secret_key_len = len(str(settings.secret_key or "").strip())
-    admin_password_default = settings.admin_default_password == "ChangeMe123!"
+    admin_password_default = settings.uses_legacy_default_admin_password
     security_level: Literal["pass", "warn", "fail"] = "pass"
     security_messages: list[str] = []
     if secret_key_len < 24:
@@ -2523,8 +2523,10 @@ async def delete_system_config(
 @router.post("/password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_password(
     payload: PasswordChangeRequest,
-    current_admin=Depends(get_current_admin),
+    current_admin=Depends(get_current_user),
     service: AuthService = Depends(get_auth_service),
 ) -> None:
+    if not current_admin.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
     await service.change_password(current_admin.username, payload.old_password, payload.new_password)
     logger.info("管理员 %s 修改密码", current_admin.username)
