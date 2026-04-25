@@ -1,0 +1,279 @@
+/* UI Enhancement Utilities */
+
+/* Smooth Focus Styles */
+*:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 3px;
+  border-radius: var(--md-radius-xs);
+  transition: outline-offset var(--md-duration-short) var(--md-easing-standard);
+}
+
+/* Enhanced Hover States for Interactive Elements */
+a:not(.md-btn):hover,
+button:not(.md-btn):not(.md-icon-btn):not(.md-fab):hover {
+  opacity: 0.85;
+  transition: opacity var(--md-duration-short) var(--md-easing-standard);
+}
+
+/* Smooth Image Loading */
+img {
+  transition: opacity var(--md-duration-medium) var(--md-easing-standard);
+}
+
+img[loading="lazy"] {
+  opacity: 0;
+}
+
+img[loading="lazy"].loaded,
+img:not([loading="lazy"]) {
+  opacity: 1;
+}
+
+/* Enhanced Scrollbar for Better UX */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--md-outline) 70%, transparent) transparent;
+}
+
+/* Skeleton Loading Animation */
+@keyframes skeleton-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.skeleton {
+  animation: skeleton-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  background: linear-gradient(
+    90deg,
+    var(--md-surface-container) 25%,
+    var(--md-surface-container-high) 50%,
+    var(--md-surface-container) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Improved Text Selection */
+::selection {
+  background: color-mix(in srgb, var(--md-primary-container) 90%, white 10%);
+  color: var(--md-on-primary-container);
+  text-shadow: none;
+}
+
+::-moz-selection {
+  background: color-mix(in srgb, var(--md-primary-container) 90%, white 10%);
+  color: var(--md-on-primary-container);
+  text-shadow: none;
+}
+
+/* Smooth Transitions for Theme Changes */
+body,
+.md-card,
+.md-btn,
+.platform-panel,
+.platform-topbar {
+  transition-property: background-color, border-color, color;
+  transition-duration: var(--md-duration-medium);
+  transition-timing-function: var(--md-easing-standard);
+}
+
+/* Enhanced Loading Spinner */
+.md-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid var(--md-surface-container-highest);
+  border-top-color: var(--md-primary);
+  border-radius: 50%;
+  animation: md-spin 0.7s cubic-bezier(0.68, -0.55, 0.265, 1.55) infinite;
+}
+
+@keyframes md-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Micro-interaction: Pulse Effect */
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.8;
+  }
+}
+
+.pulse {
+  animation: pulse 2s var(--md-easing-standard) infinite;
+}
+
+/* Bounce Animation for Notifications */
+@keyframes bounce-in {
+  0% {
+    transform: scale(0.3) translateY(-50px);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.05) translateY(0);
+  }
+  70% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.bounce-in {
+  animation: bounce-in 0.5s var(--md-easing-emphasized) both;
+}
+
+/* Slide In from Bottom */
+@keyframes slide-in-bottom {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.slide-in-bottom {
+  animation: slide-in-bottom 0.4s var(--md-easing-emphasized) both;
+}
+
+/* Fade In Scale */
+@keyframes fade-in-scale {
+  from {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.fade-in-scale {
+  animation: fade-in-scale 0.3s var(--md-easing-emphasized) both;
+}
+
+/* Enhanced Backdrop Blur */
+.backdrop-blur {
+  backdrop-filter: blur(12px) saturate(120%);
+  -webkit-backdrop-filter: blur(12px) saturate(120%);
+}
+
+/* Glass Morphism Effect */
+.glass {
+  background: color-mix(in srgb, var(--md-surface) 70%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 50%, transparent);
+}
+
+/* Gradient Text */
+.gradient-text {
+  background: linear-gradient(135deg, var(--md-primary), var(--md-secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Safe Area Insets for Mobile */
+@supports (padding: env(safe-area-inset-top)) {
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .safe-left {
+    padding-left: env(safe-area-inset-left);
+  }
+
+  .safe-right {
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .page-enter,
+  .stagger-in,
+  .bounce-in,
+  .slide-in-bottom,
+  .fade-in-scale {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* High Contrast Mode Support */
+@media (prefers-contrast: high) {
+  .md-btn,
+  .md-card,
+  .platform-panel {
+    border-width: 2px;
+  }
+
+  .md-btn-filled {
+    border: 2px solid var(--md-on-primary);
+  }
+}
+
+/* Dark Mode Preparation (for future implementation) */
+@media (prefers-color-scheme: dark) {
+  /* Placeholder for dark mode styles */
+}
+
+/* Print Styles */
+@media print {
+  .md-btn,
+  .md-fab,
+  .md-icon-btn,
+  .platform-topbar,
+  nav,
+  aside {
+    display: none !important;
+  }
+
+  .md-card,
+  .platform-panel {
+    box-shadow: none !important;
+    border: 1px solid #000 !important;
+    page-break-inside: avoid;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}
